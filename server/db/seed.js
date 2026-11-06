@@ -1,5 +1,6 @@
 // Seeds demo data when the database is empty.
-const { hashPassword } = require('./db');
+const { hashPassword } = require('../utils/password');
+const { transaction } = require('./connection');
 
 const ACTIVITIES = [
   {
@@ -67,7 +68,14 @@ const LEARNERS = [
   ['Ethan Brooks', 'ethan@nudle.edu', 'Grade 11A'],
 ];
 
+// SQLite datetime format (matches datetime('now')) so ordering by date is consistent.
+const sqlTime = (msAgo) => new Date(Date.now() - msAgo).toISOString().slice(0, 19).replace('T', ' ');
+
 function seed(db) {
+  return transaction(db, () => seedData(db));
+}
+
+function seedData(db) {
   const count = db.prepare('SELECT COUNT(*) c FROM users').get().c;
   if (count > 0) return false;
 
@@ -89,12 +97,19 @@ function seed(db) {
       const mode = (li * 3 + ai) % 3; // 0 completed, 1 in progress, 2 assigned
       const due = `+${7 + ai * 3} days`;
       if (mode === 0) {
-        const score = 60 + ((li * 7 + ai * 11) % 41);
-        const done = new Date(Date.now() - 86400000 * (li + 1)).toISOString();
-        const asgId = insAsg.run(aid, lid, due, 'completed', score, score, 1, new Date(Date.now() - 86400000 * (li + 2)).toISOString(), done).lastInsertRowid;
-        db.prepare('INSERT INTO attempts (assignment_id, score, passed, submitted_at) VALUES (?,?,1,?)').run(asgId, score, done);
+        // simulations need a hit (pass mark 100); other scores always clear the pass mark
+        const score = ACTIVITIES[ai].type === 'simulation' ? 100 : 60 + ((li * 7 + ai * 11) % 41);
+        const done = sqlTime(86400000 * (li + 1));
+        const asgId = insAsg.run(aid, lid, due, 'completed', score, score, 1, sqlTime(86400000 * (li + 2)), done).lastInsertRowid;
+        let runId = null;
+        if (ACTIVITIES[ai].type === 'simulation') {
+          // a successful launch: 45° at 19.8 m/s lands at ~40 m
+          runId = db.prepare('INSERT INTO simulation_runs (assignment_id, angle, speed, range_m, target_m, hit, created_at) VALUES (?,?,?,?,?,1,?)')
+            .run(asgId, 45, 19.8, 40, 40, done).lastInsertRowid;
+        }
+        db.prepare('INSERT INTO attempts (assignment_id, score, passed, submitted_at, simulation_run_id) VALUES (?,?,1,?,?)').run(asgId, score, done, runId);
       } else if (mode === 1) {
-        insAsg.run(aid, lid, due, 'in_progress', null, null, 0, new Date().toISOString(), null);
+        insAsg.run(aid, lid, due, 'in_progress', null, null, 0, sqlTime(0), null);
       } else {
         insAsg.run(aid, lid, due, 'assigned', null, null, 0, null, null);
       }

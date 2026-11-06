@@ -58,7 +58,7 @@
     if (isOverdue(a)) return '<span class="badge b-danger">Overdue</span>';
     return { completed: '<span class="badge b-success">Completed</span>', in_progress: '<span class="badge b-warning">In progress</span>', assigned: '<span class="badge b-neutral">Not started</span>' }[a.status];
   };
-  const typeBadge = (t) => `<span class="badge ${{ lesson: 'b-info', quiz: 'b-primary', simulation: 'b-warning' }[t]}">${esc(t[0].toUpperCase() + t.slice(1))}</span>`;
+  const typeBadge = (t) => `<span class="badge ${{ lesson: 'b-navy', quiz: 'b-primary', simulation: 'b-purple-solid' }[t]}">${esc(t[0].toUpperCase() + t.slice(1))}</span>`;
   const progress = (pct, cls = '') => `<div class="progress ${cls}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>`;
   const loading = () => '<div class="empty">Loading…</div>';
   function donut(segments, size = 140) {
@@ -140,9 +140,9 @@
         <a class="btn btn-primary" href="#/admin/activities?new=1">+ New activity</a></div>
       <div class="grid grid-4">
         ${statCard('Total learners', s.totalLearners, `${s.totalLearners - s.activeLearners} deactivated`, '👥', 'var(--primary-50)')}
-        ${statCard('Active learners', s.activeLearners, s.totalLearners ? `${Math.round(s.activeLearners / s.totalLearners * 100)}% of all learners` : '', '✅', 'var(--success-50)')}
-        ${statCard('Assigned activities', s.assignedActivities, `${s.totalActivities} activities in library`, '🧩', 'var(--info-50)')}
-        ${statCard('Completion rate', s.completionRate + '%', s.averageScore != null ? `Avg. score ${s.averageScore}%` : 'No completions yet', '🎯', 'var(--warning-50)')}
+        ${statCard('Active learners', s.activeLearners, s.totalLearners ? `${Math.round(s.activeLearners / s.totalLearners * 100)}% of all learners` : '', '✅', 'var(--primary-50)')}
+        ${statCard('Assigned activities', s.assignedActivities, `Active learners · ${s.totalActivities} activities in library`, '🧩', 'var(--primary-50)')}
+        ${statCard('Completion rate', s.completionRate + '%', s.averageScore != null ? `Avg. score ${s.averageScore}%` : 'No completions yet', '🎯', 'var(--primary-50)')}
       </div>
       <div class="grid grid-2" style="margin-top:16px">
         <div class="card"><h2>Assignment status</h2>
@@ -260,10 +260,10 @@
         <div><h1>${esc(l.name)}</h1><p class="muted" style="margin:0">${esc(l.email)} · ${esc(l.cohort || 'No cohort')} · ${l.active ? '<span class="badge b-success">Active</span>' : '<span class="badge b-neutral">Deactivated</span>'}</p></div></div>
         <div class="row"><button class="btn" id="edit">Edit</button><button class="btn btn-primary" id="assign">Assign activity</button></div></div>
       <div class="grid grid-4">
-        ${statCard('Assigned', s.total, `${s.notStarted} not started`, '🧩', 'var(--info-50)')}
-        ${statCard('Completed', s.completed, `${s.inProgress} in progress`, '✅', 'var(--success-50)')}
-        ${statCard('Completion rate', s.completionRate + '%', '', '🎯', 'var(--warning-50)')}
-        ${statCard('Average score', s.averageScore != null ? s.averageScore + '%' : '—', `Last login: ${fmtDate(l.last_login)}`, '⭐', 'var(--primary-50)')}
+        ${statCard('Assigned', s.total, `${s.notStarted} not started`, '🧩', 'var(--primary-50)')}
+        ${statCard('Completed', s.completed, `${s.inProgress} in progress`, '✅', 'var(--primary-50)')}
+        ${statCard('Completion rate', s.completionRate + '%', '', '🎯', 'var(--primary-50)')}
+        ${statCard('Average score', s.averageScore != null ? s.averageScore + '%' : '—', `Last login: ${fmtDate(l.lastLogin)}`, '⭐', 'var(--primary-50)')}
       </div>
       <div class="card" style="margin-top:16px"><h2>Assigned activities</h2>
         <div class="table-wrap"><table><thead><tr><th>Activity</th><th>Status</th><th class="hide-sm">Due</th><th>Best score</th><th class="hide-sm">Attempts</th><th class="hide-sm">Completed</th><th></th></tr></thead><tbody>
@@ -275,7 +275,12 @@
       <div class="card"><h2>Attempt history</h2>
         ${d.attempts.length ? `<div class="table-wrap"><table><thead><tr><th>Activity</th><th>Score</th><th>Result</th><th>Submitted</th></tr></thead><tbody>
           ${d.attempts.map(t => `<tr><td>${esc(t.title)}</td><td>${t.score}%</td><td>${t.passed ? '<span class="badge b-success">Passed</span>' : '<span class="badge b-danger">Not passed</span>'}</td><td>${fmtDate(t.submitted_at)}</td></tr>`).join('')}
-        </tbody></table></div>` : '<p class="muted">No attempts submitted through the platform yet.</p>'}</div>`;
+        </tbody></table></div>` : '<p class="muted">No attempts submitted through the platform yet.</p>'}</div>
+      <div class="card"><h2>Simulation results</h2>
+        ${d.simulationRuns.length ? `<div class="table-wrap"><table><thead><tr><th>Activity</th><th>Angle</th><th>Speed</th><th>Landed</th><th>Target</th><th>Result</th><th class="hide-sm">When</th></tr></thead><tbody>
+          ${d.simulationRuns.map(r => `<tr><td>${esc(r.title)}</td><td>${r.angle}°</td><td>${r.speed} m/s</td><td>${r.range_m} m</td><td>${r.target_m} m</td>
+            <td>${r.hit ? '<span class="badge b-success">Hit</span>' : '<span class="badge b-danger">Miss</span>'}</td><td class="hide-sm">${fmtDate(r.created_at)}</td></tr>`).join('')}
+        </tbody></table></div>` : '<p class="muted">No simulation launches recorded yet.</p>'}</div>`;
     $('#edit').onclick = () => learnerForm(l, () => adminLearnerDetail(id));
     $('#assign').onclick = async () => {
       const acts = await api('/api/activities');
@@ -429,9 +434,9 @@
         <h1 style="margin-top:6px">${esc(a.title)}</h1><p class="muted" style="margin:0">${esc(a.description)}</p></div>
         <div class="row"><button class="btn" id="edit">Edit</button><button class="btn btn-primary" id="assign">Assign</button></div></div>
       <div class="grid grid-4">
-        ${statCard('Assigned learners', s.total, `Pass mark ${a.pass_mark}%`, '👥', 'var(--info-50)')}
-        ${statCard('Completed', s.completed, `${s.inProgress} in progress · ${s.notStarted} not started`, '✅', 'var(--success-50)')}
-        ${statCard('Completion rate', s.completionRate + '%', '', '🎯', 'var(--warning-50)')}
+        ${statCard('Assigned learners', s.total, `Pass mark ${a.pass_mark}%`, '👥', 'var(--primary-50)')}
+        ${statCard('Completed', s.completed, `${s.inProgress} in progress · ${s.notStarted} not started`, '✅', 'var(--primary-50)')}
+        ${statCard('Completion rate', s.completionRate + '%', '', '🎯', 'var(--primary-50)')}
         ${statCard('Average score', s.averageScore != null ? s.averageScore + '%' : '—', '', '⭐', 'var(--primary-50)')}
       </div>
       <div class="card" style="margin-top:16px"><h2>Learner progress</h2>
@@ -460,9 +465,9 @@
       main.innerHTML = `
         <div class="page-head"><div><h1>Hi ${esc(first)} 👋</h1><p class="muted">Here are your learning activities</p></div></div>
         <div class="grid grid-4">
-          ${statCard('Assigned', s.total, '', '🧩', 'var(--info-50)')}
-          ${statCard('Completed', s.completed, '', '✅', 'var(--success-50)')}
-          ${statCard('In progress', s.inProgress, '', '⏳', 'var(--warning-50)')}
+          ${statCard('Assigned', s.total, '', '🧩', 'var(--primary-50)')}
+          ${statCard('Completed', s.completed, '', '✅', 'var(--primary-50)')}
+          ${statCard('In progress', s.inProgress, '', '⏳', 'var(--primary-50)')}
           ${statCard('Overall progress', s.completionRate + '%', s.averageScore != null ? `Avg. score ${s.averageScore}%` : '', '🎯', 'var(--primary-50)')}
         </div>
         <div style="margin-top:22px" class="tabs" role="tablist">
@@ -508,7 +513,7 @@
       </div>`;
 
     let lastShot = null;
-    if (a.type === 'simulation') lastShot = setupSimulation(c);
+    if (a.type === 'simulation') lastShot = setupSimulation(c, id);
 
     $('#submit').onclick = async () => {
       const answers = questions.map((_, i) => { const el = $(`input[name="q${i}"]:checked`); return el ? Number(el.value) : null; });
@@ -516,7 +521,7 @@
       if (a.type === 'simulation' && !lastShot()) { $('#sub-msg').textContent = 'Launch the projectile at least once before submitting.'; return; }
       $('#submit').disabled = true;
       try {
-        const r = await api(`/api/me/assignments/${id}/submit`, { method: 'POST', body: { answers, simulation: lastShot ? lastShot() : undefined } });
+        const r = await api(`/api/me/assignments/${id}/submit`, { method: 'POST', body: { answers, simulationRunId: lastShot ? lastShot().id : undefined } });
         r.feedback.forEach((f, i) => $$(`.option[data-q="${i}"]`).forEach(o => {
           o.classList.remove('correct', 'wrong');
           if (+o.dataset.o === f.correctAnswer) o.classList.add('correct');
@@ -535,34 +540,38 @@
   }
 
   // Projectile simulation drawn on canvas. Returns a getter for the last launch parameters.
-  function setupSimulation(c) {
+  function setupSimulation(c, assignmentId) {
     const cv = $('#sim'), ctx = cv.getContext('2d');
     const W = cv.width, H = cv.height, pad = 30, maxX = Math.max(60, c.targetDistance * 1.6);
     const sx = (W - pad * 2) / maxX, ground = H - 30, sy = sx;
     let shot = null, anim;
     const draw = (path = []) => {
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = '#86efac'; ctx.fillRect(0, ground, W, H - ground);
-      ctx.fillStyle = '#475569'; ctx.font = '12px Inter, sans-serif';
+      ctx.fillStyle = '#dfe2ea'; ctx.fillRect(0, ground, W, H - ground);
+      ctx.fillStyle = '#475569'; ctx.font = '12px Poppins, system-ui, sans-serif';
       for (let m = 0; m <= maxX; m += 10) { const x = pad + m * sx; ctx.fillRect(x, ground, 1, 6); ctx.fillText(`${m}m`, x - 8, ground + 20); }
       const tx = pad + c.targetDistance * sx;
-      ctx.fillStyle = 'rgba(22,163,74,.25)'; ctx.fillRect(tx - c.tolerance * sx, ground - 4, c.tolerance * 2 * sx, 4);
+      ctx.fillStyle = 'rgba(109,40,217,.25)'; ctx.fillRect(tx - c.tolerance * sx, ground - 4, c.tolerance * 2 * sx, 4);
       ctx.strokeStyle = '#334155'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(tx, ground); ctx.lineTo(tx, ground - 40); ctx.stroke();
-      ctx.fillStyle = '#dc2626'; ctx.beginPath(); ctx.moveTo(tx, ground - 40); ctx.lineTo(tx + 20, ground - 33); ctx.lineTo(tx, ground - 26); ctx.fill();
+      ctx.fillStyle = '#6d28d9'; ctx.beginPath(); ctx.moveTo(tx, ground - 40); ctx.lineTo(tx + 20, ground - 33); ctx.lineTo(tx, ground - 26); ctx.fill();
       const ang = +$('#ang').value * Math.PI / 180;
-      ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(pad, ground); ctx.lineTo(pad + Math.cos(ang) * 28, ground - Math.sin(ang) * 28); ctx.stroke();
+      ctx.strokeStyle = '#14213d'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(pad, ground); ctx.lineTo(pad + Math.cos(ang) * 28, ground - Math.sin(ang) * 28); ctx.stroke();
       if (path.length) {
-        ctx.strokeStyle = '#4f46e5'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]); ctx.beginPath();
+        ctx.strokeStyle = '#6d28d9'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]); ctx.beginPath();
         path.forEach(([x, y], i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, pad + x * sx, ground - y * sy)); ctx.stroke(); ctx.setLineDash([]);
         const [x, y] = path[path.length - 1];
-        ctx.fillStyle = '#4f46e5'; ctx.beginPath(); ctx.arc(pad + x * sx, ground - y * sy, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#6d28d9'; ctx.beginPath(); ctx.arc(pad + x * sx, ground - y * sy, 6, 0, Math.PI * 2); ctx.fill();
       }
     };
     const upd = () => { $('#ang-v').textContent = $('#ang').value; $('#spd-v').textContent = $('#spd').value; if (!anim) draw(); };
     $('#ang').oninput = upd; $('#spd').oninput = upd; draw();
-    $('#launch').onclick = () => {
+    $('#launch').onclick = async () => {
       cancelAnimationFrame(anim);
       const angle = +$('#ang').value, speed = +$('#spd').value, g = 9.8, th = angle * Math.PI / 180;
+      // The server evaluates and stores every launch; the animation is just a visualisation.
+      let run;
+      try { run = await api(`/api/me/assignments/${assignmentId}/simulation-runs`, { method: 'POST', body: { angle, speed } }); }
+      catch (ex) { toast(ex.message, true); return; }
       const vx = speed * Math.cos(th), vy = speed * Math.sin(th), T = 2 * vy / g, range = vx * T;
       const path = []; const start = performance.now(); const dur = Math.min(2500, 600 + T * 400);
       const step = (now) => {
@@ -571,10 +580,9 @@
         draw(path);
         if (t < T) anim = requestAnimationFrame(step);
         else {
-          anim = null; shot = { angle, speed };
-          const hit = Math.abs(range - c.targetDistance) <= c.tolerance;
-          $('#sim-msg').innerHTML = hit ? `<span class="badge b-success">Hit!</span> Landed at ${range.toFixed(1)} m. Now submit the activity.`
-            : `Landed at <strong>${range.toFixed(1)} m</strong> — ${range < c.targetDistance ? 'too short' : 'too far'}. Adjust and try again.`;
+          anim = null; shot = run;
+          $('#sim-msg').innerHTML = run.hit ? `<span class="badge b-success">Hit!</span> Landed at ${run.range} m. Now submit the activity.`
+            : `Landed at <strong>${run.range} m</strong> — ${run.range < run.target ? 'too short' : 'too far'}. Adjust and try again.`;
         }
       };
       anim = requestAnimationFrame(step);
