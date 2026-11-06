@@ -1,0 +1,21 @@
+{
+  "name": "nudle-learn",
+  "version": "1.0.0",
+  "description": "Nudle Learn – learning management platform for administrators and learners",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "dev": "node --no-warnings --watch server/index.js",
+    "test": "node --no-warnings --test test/*.test.js",
+    "reset": "rm -f data/nudle.db"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.22.3"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
