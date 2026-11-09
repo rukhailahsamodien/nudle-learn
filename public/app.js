@@ -48,6 +48,13 @@
     eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
     eyeOff: '<path d="M17.9 17.9A10 10 0 0 1 12 19c-6.5 0-10-7-10-7a18 18 0 0 1 5.1-5.9M9.9 4.2A9 9 0 0 1 12 4c6.5 0 10 7 10 7a18 18 0 0 1-2.2 3.2M1 1l22 22"/><path d="M14.1 14.1a3 3 0 0 1-4.2-4.2"/>',
     sort: '<path d="m7 15 5 5 5-5M7 9l5-5 5 5"/>',
+    history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+    printer: '<path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+    wifiOff: '<path d="M1 1l22 22M16.7 11.1A11 11 0 0 1 19 12.6M5 12.6a11 11 0 0 1 5.2-2.5M10.7 5.1A16 16 0 0 1 22.6 9M1.4 9a16 16 0 0 1 4.4-2.8M8.5 16.1a5 5 0 0 1 7 0M12 20h.01"/>',
+    radio: '<circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.5M7.8 16.2a6 6 0 0 1 0-8.5M19.1 4.9a10 10 0 0 1 0 14.2M4.9 19.1a10 10 0 0 1 0-14.2"/>',
+    save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
     calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   };
   const icon = (name, { size = 18, label, cls = '' } = {}) =>
@@ -61,23 +68,98 @@
   // API client
   // =====================================================================
   const state = { token: localStorage.getItem('nudle_token'), user: null };
-  async function api(path, { method = 'GET', body } = {}) {
-    let res;
-    try {
-      res = await fetch(path, {
-        method,
-        headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-    } catch {
-      throw new Error('Could not reach the server. Check your connection and try again.');
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const newKey = () => (window.crypto?.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`).replace(/[^A-Za-z0-9_-]/g, '');
+  // Robust fetch wrapper:
+  //  - aborts after `timeoutMs` so the UI never hangs on a stalled connection
+  //  - retries safe requests (GET/PUT, or POSTs carrying an Idempotency-Key) on network errors and 502/503/504,
+  //    with exponential backoff — the key guarantees a retried POST is never applied twice on the server
+  async function api(path, { method = 'GET', body, idempotencyKey, retries, timeoutMs = 15000, raw = false } = {}) {
+    const safe = method === 'GET' || method === 'PUT' || method === 'DELETE' || !!idempotencyKey;
+    const maxRetries = retries ?? (safe ? 2 : 0);
+    for (let attempt = 0; ; attempt++) {
+      const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      let res;
+      try {
+        res = await fetch(path, {
+          method, signal: ctrl.signal,
+          headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}), ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+      } catch (err) {
+        clearTimeout(timer);
+        if (attempt < maxRetries) { await sleep(400 * 2 ** attempt); continue; }
+        const e = new Error(err.name === 'AbortError' ? 'The server took too long to respond. Please try again.'
+          : navigator.onLine === false ? 'You appear to be offline. Check your connection and try again.'
+          : 'Could not reach the server. Check your connection and try again.');
+        e.network = true; throw e;
+      }
+      clearTimeout(timer);
+      if ([502, 503, 504].includes(res.status) && attempt < maxRetries) { await sleep(400 * 2 ** attempt); continue; }
+      if (res.status === 401 && !path.includes('/auth/login')) { logout(true); const e = new Error('Your session has expired. Please log in again.'); e.status = 401; throw e; }
+      if (raw && res.ok) return res;
+      if (res.status === 204) return null;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { const e = new Error(data.error || `Request failed (${res.status})`); e.code = data.code; e.status = res.status; throw e; }
+      return data;
     }
-    if (res.status === 401 && !path.includes('/auth/login')) { logout(true); throw new Error('Your session has expired. Please log in again.'); }
-    if (res.status === 204) return null;
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) { const e = new Error(data.error || `Request failed (${res.status})`); e.code = data.code; e.status = res.status; throw e; }
-    return data;
   }
+  // Downloads a file from an authenticated endpoint (e.g. CSV reports).
+  async function download(path) {
+    const res = await api(path, { raw: true });
+    const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || 'download.csv';
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return name;
+  }
+  const exportButton = (id, label = 'Export CSV') => `<button class="btn" id="${id}">${icon('download')}${label}</button>`;
+  function bindExport(btn, path) {
+    if (!btn) return;
+    btn.onclick = () => busy(btn, 'Preparing…', async () => {
+      try { toast(`Downloaded ${await download(path)}`); } catch (ex) { toast(ex.message, 'error'); }
+    });
+  }
+
+  // Live updates: a streaming fetch to the Server-Sent Events endpoint (keeps the token out of the URL),
+  // reconnecting with backoff if the connection drops.
+  let liveCtrl = null, liveStatus = 'connecting';
+  function stopLive() { if (liveCtrl) { liveCtrl.abort(); liveCtrl = null; } }
+  function startLive(onEvent) {
+    stopLive();
+    const ctrl = new AbortController(); liveCtrl = ctrl;
+    const setStatus = (st) => {
+      liveStatus = st;
+      $$('.live-chip').forEach(chip => { chip.className = `live-chip ${st}`; $('.live-text', chip).textContent = st === 'live' ? 'Live' : st === 'connecting' ? 'Connecting…' : 'Reconnecting…'; });
+    };
+    (async () => {
+      let delay = 1000;
+      while (!ctrl.signal.aborted) {
+        try {
+          const res = await fetch('/api/admin/events', { headers: { Authorization: `Bearer ${state.token}` }, signal: ctrl.signal });
+          if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+          setStatus('live'); delay = 1000;
+          const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
+          for (;;) {
+            const { value, done } = await reader.read(); if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let i;
+            while ((i = buf.indexOf('\n\n')) >= 0) {
+              const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+              const ev = /^event: (.*)$/m.exec(chunk)?.[1], data = /^data: (.*)$/m.exec(chunk)?.[1];
+              if (ev === 'change' && data) { try { onEvent(JSON.parse(data)); } catch { /* ignore a bad message */ } }
+            }
+          }
+        } catch { if (ctrl.signal.aborted) return; }
+        if (ctrl.signal.aborted) return;
+        setStatus('reconnecting'); await sleep(delay); delay = Math.min(delay * 2, 15000);
+      }
+    })();
+  }
+  const liveChip = () => `<span class="live-chip ${liveStatus}" role="status"><i aria-hidden="true"></i><span class="live-text">${liveStatus === 'live' ? 'Live' : 'Connecting…'}</span></span>`;
+  const fmtTime = (d) => { const dt = new Date(d.includes('T') ? d : d.replace(' ', 'T') + 'Z'); return dt.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
+  const timeAgo = (iso) => { const s = Math.round((Date.now() - new Date(iso)) / 1000); return s < 10 ? 'just now' : s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : fmtTime(iso); };
+
   function logout(expired = false) {
     state.token = null; state.user = null;
     localStorage.removeItem('nudle_token');
@@ -280,6 +362,21 @@
     }).join('');
     return `<svg class="donut" viewBox="0 0 140 140" width="140" height="140" role="img" aria-label="${esc(label)}"><circle r="${r}" cx="70" cy="70" fill="none" stroke="#eceef3" stroke-width="18"/>${arcs}</svg>`;
   }
+  const PLANETS = {
+    earth: { label: 'Earth', g: 9.8, sky: ['#1b2550', '#4c2a8f', '#b9a3f0'], hills: ['rgba(109,40,217,.35)', 'rgba(20,33,61,.45)'], ground: ['#14213d', '#0c1630'] },
+    moon: { label: 'Moon', g: 1.62, sky: ['#05070f', '#141a2e', '#2b3352'], hills: ['rgba(148,163,184,.25)', 'rgba(203,213,225,.35)'], ground: ['#475569', '#1e293b'] },
+    mars: { label: 'Mars', g: 3.71, sky: ['#2a1325', '#7c2d3a', '#e8916b'], hills: ['rgba(180,83,9,.35)', 'rgba(124,45,18,.5)'], ground: ['#7c2d12', '#431407'] },
+    jupiter: { label: 'Jupiter', g: 24.79, sky: ['#1e1b2e', '#7a4b2a', '#e6b980'], hills: ['rgba(234,179,8,.25)', 'rgba(146,64,14,.45)'], ground: ['#78350f', '#451a03'] },
+    custom: { label: 'Custom world', g: null, sky: ['#0f172a', '#334155', '#94a3b8'], hills: ['rgba(109,40,217,.3)', 'rgba(20,33,61,.45)'], ground: ['#1f2937', '#111827'] },
+  };
+  const ACTION_LABELS = {
+    'auth.login': 'Logged in', 'auth.login_failed': 'Failed login', 'learner.create': 'Learner added', 'learner.update': 'Learner updated',
+    'learner.deactivate': 'Learner deactivated', 'learner.reactivate': 'Learner reactivated', 'activity.create': 'Activity created',
+    'activity.update': 'Activity updated', 'activity.delete': 'Activity deleted', 'assignment.create': 'Assigned', 'assignment.delete': 'Unassigned',
+    'attempt.pass': 'Completed', 'attempt.fail': 'Attempt (not passed)', 'simulation.launch': 'Simulation launch', 'report.export': 'Report exported',
+  };
+  const actionLabel = (a) => ACTION_LABELS[a] || a;
+  const actionTone = (a) => a === 'auth.login_failed' || a === 'activity.delete' || a === 'learner.deactivate' ? 'danger' : a === 'attempt.pass' ? 'success' : a === 'attempt.fail' ? 'warning' : 'brand';
   const STATUS_COLORS = { completed: '#16a34a', in_progress: '#d97706', not_started: '#c5cad6', overdue: '#dc2626' };
 
   // =====================================================================
@@ -289,7 +386,8 @@
     document.title = `${title ? title + ' · ' : ''}Nudle Learn`;
     const isAdmin = state.user.role === 'admin';
     const links = isAdmin
-      ? [['#/admin', 'dashboard', 'dashboard', 'Dashboard'], ['#/admin/learners', 'learners', 'users', 'Learners'], ['#/admin/activities', 'activities', 'layers', 'Activities']]
+      ? [['#/admin', 'dashboard', 'dashboard', 'Dashboard'], ['#/admin/learners', 'learners', 'users', 'Learners'], ['#/admin/activities', 'activities', 'layers', 'Activities'],
+         ['#/admin/analytics', 'analytics', 'chart', 'Analytics'], ['#/admin/audit', 'audit', 'history', 'Audit log']]
       : [['#/learn', 'dashboard', 'home', 'My activities'], ['#/learn/progress', 'progress', 'chart', 'My progress']];
     app.innerHTML = `
       <button class="skip-link" id="skip">Skip to main content</button>
@@ -395,11 +493,13 @@
   // =====================================================================
   // ADMIN — Dashboard
   // =====================================================================
+  const liveFeed = []; let lastStats = null;
   const adminDashboard = () => page('dashboard', 'Dashboard', {}, async (main) => {
-    const [s, acts] = await Promise.all([api('/api/admin/stats'), api('/api/activities')]);
-    main.innerHTML = `
-      <div class="page-head"><div><h1>Dashboard</h1><p class="muted">Overview of learners and activity performance</p></div>
-        <a class="btn btn-primary" href="#/admin/activities?new=1">${icon('plus')}New activity</a></div>
+    const render = async (fresh = false) => {
+      const [s, acts] = await Promise.all([api('/api/admin/stats'), api('/api/activities')]);
+      main.innerHTML = `
+      <div class="page-head"><div><h1>Dashboard ${liveChip()}</h1><p class="muted">Overview of learners and activity performance · updates automatically</p></div>
+        <div class="row"><a class="btn" href="#/admin/analytics">${icon('chart')}Analytics</a><a class="btn btn-primary" href="#/admin/activities?new=1">${icon('plus')}New activity</a></div></div>
       <div class="grid grid-4">
         ${statCard('Total learners', s.totalLearners, `${s.inactiveLearners} deactivated`, 'users')}
         ${statCard('Active learners', s.activeLearners, s.totalLearners ? `${Math.round(s.activeLearners / s.totalLearners * 100)}% of all learners` : 'No learners yet', 'userOn')}
@@ -429,12 +529,30 @@
             <td data-v="${a.completionRate}"><div class="cell-progress">${progress(a.completionRate, 'success', `${a.title} completion`)}<span class="small muted">${a.completed}/${a.assigned} · ${a.completionRate}%</span></div></td>
             <td data-v="${a.avg_score ?? ''}">${a.avg_score != null ? a.avg_score + '%' : '—'}</td></tr>`).join('')}
           </tbody></table></div>` : emptyState({ ico: 'layers', title: 'No activities yet', action: '<a class="btn btn-primary" href="#/admin/activities?new=1">Create activity</a>' })}</section>
-        <section class="card" aria-labelledby="h-recent"><h2 id="h-recent">Recent completions</h2>
+        <section class="card" aria-labelledby="h-live"><h2 id="h-live" class="with-icon">${icon('radio')}Live activity</h2>
+          ${liveFeed.length ? `<ul class="feed live-feed">${liveFeed.map((e, k) => `<li class="person ${k === 0 && fresh ? 'flash' : ''}"><span class="avatar">${initials(e.actor?.name || '?')}</span>
+            <div class="grow"><span>${esc(e.summary)}</span><div class="small muted">${timeAgo(e.at)}</div></div></li>`).join('')}</ul>`
+            : `<p class="muted small">Waiting for activity… Launches, submissions and admin changes appear here instantly.</p>`}
+          <h2 id="h-recent" class="mt">Recent completions</h2>
           ${s.recent.length ? `<ul class="feed">${s.recent.map(r => `<li class="person"><span class="avatar">${initials(r.learner)}</span>
             <div class="grow"><strong>${esc(r.learner)}</strong><div class="small muted">${esc(r.activity)} · ${fmtDate(r.completed_at)}</div></div><span class="badge b-success">${r.score}%</span></li>`).join('')}</ul>`
             : emptyState({ ico: 'trophy', title: 'No completions yet', text: 'Completed activities will appear here.' })}
         </section>
       </div>`;
+      // Briefly highlight any number that changed since the last render.
+      const vals = [s.totalLearners, s.activeLearners, s.assignedActivities, s.completionRate];
+      if (lastStats) $$('.stat', main).slice(0, 4).forEach((el, k) => { if (vals[k] !== lastStats[k]) el.classList.add('bump'); });
+      lastStats = vals;
+      enhanceTables(main);
+    };
+    lastStats = null;
+    await render();
+    let t;
+    startLive((e) => {
+      liveFeed.unshift(e); liveFeed.length = Math.min(liveFeed.length, 6);
+      announce(e.summary);
+      clearTimeout(t); t = setTimeout(() => { if ($('#h-live')) render(true).catch(() => {}); }, 250);
+    });
   });
 
   // =====================================================================
@@ -445,7 +563,7 @@
     const cohorts = await api('/api/cohorts');
     main.innerHTML = `
       <div class="page-head"><div><h1>Learners</h1><p class="muted">Add, edit, search, filter and deactivate learners</p></div>
-        <button class="btn btn-primary" id="add">${icon('plus')}Add learner</button></div>
+        <div class="row">${exportButton('export-all')}<button class="btn btn-primary" id="add">${icon('plus')}Add learner</button></div></div>
       <div class="card">
         <div class="toolbar" role="search">
           <div class="search grow"><label for="q" class="sr-only">Search learners</label>${icon('search')}
@@ -502,6 +620,7 @@
     $('#status').onchange = (e) => { learnerFilters.status = e.target.value; load(); };
     $('#cohort').onchange = (e) => { learnerFilters.cohort = e.target.value; load(); };
     $('#add').onclick = () => learnerForm(null, load);
+    bindExport($('#export-all'), '/api/reports/learners.csv');
     await load();
   });
 
@@ -547,7 +666,8 @@
       ${crumbs([['Learners', '#/admin/learners'], [l.name]])}
       <div class="page-head"><div class="person"><span class="avatar avatar-lg">${initials(l.name)}</span>
         <div><h1>${esc(l.name)}</h1><p class="muted meta-line">${esc(l.email)} · ${esc(l.cohort || 'No cohort')} · ${activeBadge(l.active)}</p></div></div>
-        <div class="row"><button class="btn" id="edit">${icon('edit')}Edit</button><button class="btn btn-primary" id="assign">${icon('plus')}Assign activity</button></div></div>
+        <div class="row no-print">${exportButton('export-one')}<button class="btn" id="print">${icon('printer')}Print / PDF</button><button class="btn" id="edit">${icon('edit')}Edit</button><button class="btn btn-primary" id="assign">${icon('plus')}Assign activity</button></div></div>
+      <p class="print-only small muted">Learner performance report · generated ${new Date().toLocaleString()}</p>
       <div class="grid grid-4">
         ${statCard('Assigned', s.total, `${s.notStarted} not started`, 'layers')}
         ${statCard('Completed', s.completed, `${s.inProgress} in progress`, 'checkCircle')}
@@ -571,7 +691,14 @@
           ${d.simulationRuns.map(r => `<tr><td>${esc(r.title)}</td><td data-v="${r.angle}">${r.angle}°</td><td data-v="${r.speed}">${r.speed} m/s</td><td data-v="${r.range_m}">${r.range_m} m <span class="small muted">/ ${r.target_m} m</span></td>
             <td>${r.hit ? `<span class="badge b-success">${icon('target', { size: 12 })}Hit</span>` : `<span class="badge b-danger">${icon('x', { size: 12 })}Miss</span>`}</td><td data-v="${r.created_at}">${fmtDate(r.created_at)}</td></tr>`).join('')}
         </tbody></table></div>` : emptyState({ ico: 'flask', title: 'No simulation launches yet', text: 'Each launch the learner makes is recorded here.' })}</section>
-      </div>`;
+      </div>
+      <section class="card mt" aria-labelledby="h-log"><h2 id="h-log" class="with-icon">${icon('history')}Activity history</h2>
+        ${d.activityLog.length ? `<ol class="timeline">${d.activityLog.slice(0, 15).map(e => `<li><span class="tl-dot ${actionTone(e.action)}" aria-hidden="true"></span>
+          <div><span>${esc(e.summary)}</span><div class="small muted">${fmtTime(e.created_at)} · ${esc(actionLabel(e.action))}${e.actor_name && e.actor_id !== l.id ? ` · by ${esc(e.actor_name)}` : ''}</div></div></li>`).join('')}</ol>
+          <a class="small" href="#/admin/audit?entityId=${l.id}">See full audit log</a>`
+          : emptyState({ ico: 'history', title: 'No recorded activity yet' })}</section>`;
+    bindExport($('#export-one'), `/api/reports/learners/${l.id}.csv`);
+    $('#print').onclick = () => window.print();
     $('#edit').onclick = () => learnerForm(l, () => adminLearnerDetail(id));
     const openAssign = async (e) => {
       const btn = e.currentTarget;
@@ -652,7 +779,17 @@
         <fieldset id="sim-fields" class="fieldset"><legend>Simulation settings</legend><div class="form-grid">
           ${field({ id: 't-target', label: 'Target distance (m)', type: 'number', required: true, value: c.targetDistance ?? 40, hint: '5–160 m', attrs: 'min="5" max="160"' })}
           ${field({ id: 't-tol', label: 'Tolerance (± m)', type: 'number', required: true, value: c.tolerance ?? 2, hint: 'How close counts as a hit', attrs: 'min="0.5" max="20" step="0.5"' })}
-          </div>${field({ id: 't-instr', label: 'Instructions', textarea: true, value: c.instructions, attrs: 'rows="2" maxlength="1000"' })}</fieldset>
+          ${field({ id: 't-planet', label: 'World (gravity)', required: true, options: Object.entries(PLANETS).map(([k, p]) => [k, `${p.label}${p.g ? ` — ${p.g} m/s²` : ''}`, (c.planet || 'earth') === k]) })}
+          ${field({ id: 't-gravity', label: 'Custom gravity (m/s²)', type: 'number', required: true, value: c.planet === 'custom' ? c.gravity : '', hint: '0.5–30', attrs: 'min="0.5" max="30" step="0.01"' })}
+          ${field({ id: 't-amin', label: 'Minimum angle (°)', type: 'number', required: true, value: c.angleMin ?? 5, attrs: 'min="1" max="88"' })}
+          ${field({ id: 't-amax', label: 'Maximum angle (°)', type: 'number', required: true, value: c.angleMax ?? 85, attrs: 'min="2" max="89"' })}
+          ${field({ id: 't-smin', label: 'Minimum speed (m/s)', type: 'number', required: true, value: c.speedMin ?? 5, attrs: 'min="1" max="99" step="0.5"' })}
+          ${field({ id: 't-smax', label: 'Maximum speed (m/s)', type: 'number', required: true, value: c.speedMax ?? 40, attrs: 'min="2" max="100" step="0.5"' })}
+          ${field({ id: 't-maxl', label: 'Launch limit', type: 'number', required: true, value: c.maxLaunches ?? 0, hint: '0 = unlimited', attrs: 'min="0" max="100"' })}
+          <div class="field check-field"><label class="check"><input type="checkbox" id="t-guide" ${c.showGuide === false ? '' : 'checked'}> Show aiming guide</label><p class="hint">Turn off for a harder challenge</p></div>
+          </div>
+          <p class="scenario-preview small" id="scenario-preview" aria-live="polite"></p>
+          ${field({ id: 't-instr', label: 'Instructions', textarea: true, value: c.instructions, attrs: 'rows="2" maxlength="1000"' })}</fieldset>
         <fieldset id="sec-wrap" class="fieldset"><legend>Lesson content</legend><div id="secs"></div>
           <button type="button" class="btn btn-sm" id="add-sec">${icon('plus', { size: 15 })}Add section</button></fieldset>
         <fieldset class="fieldset"><legend>Questions <span class="opt" id="q-opt"></span></legend><div id="qs"></div>
@@ -691,6 +828,20 @@
       $$('[data-rm-q]', m.el).forEach(b => b.onclick = () => { syncFromDom(); questions.splice(+b.dataset.rmQ, 1); renderParts(); });
     };
     renderParts();
+    // Scenario preview: shows the furthest possible shot so admins don't create an impossible task.
+    const scenario = () => {
+      const planet = $('#t-planet').value, g = planet === 'custom' ? +$('#t-gravity').value : PLANETS[planet].g;
+      const aMin = +$('#t-amin').value, aMax = +$('#t-amax').value, sMax = +$('#t-smax').value;
+      const best = Math.min(Math.max(45, aMin), aMax);
+      return { planet, g, maxRange: g > 0 ? (sMax * sMax * Math.sin(2 * best * Math.PI / 180)) / g : 0 };
+    };
+    const updateScenario = () => {
+      $('[data-field="t-gravity"]').hidden = $('#t-planet').value !== 'custom';
+      const { g, maxRange } = scenario(), tgt = +$('#t-target').value;
+      $('#scenario-preview').innerHTML = g > 0 ? `${icon('globe', { size: 14 })} Gravity ${g} m/s² · furthest possible shot ≈ <strong>${Math.round(maxRange)} m</strong> ${maxRange + (+$('#t-tol').value || 0) < tgt ? '<span class="text-danger">— target is out of reach</span>' : '— target reachable'}` : '';
+    };
+    ['#t-planet', '#t-gravity', '#t-amin', '#t-amax', '#t-smax', '#t-target', '#t-tol'].forEach(sel => $(sel).addEventListener('input', updateScenario));
+    updateScenario();
     $('#t-type').onchange = () => { syncFromDom(); renderParts(); };
     $('#add-sec').onclick = () => { syncFromDom(); sections.push({ heading: '', body: '' }); renderParts(); $(`#sh-${sections.length - 1}`).focus(); };
     $('#add-q').onclick = () => { syncFromDom(); questions.push({ q: '', options: ['', '', '', ''], answer: 0 }); renderParts(); $(`#qt-${questions.length - 1}`).focus(); };
@@ -717,6 +868,13 @@
         const tgt = +$('#t-target').value, tol = +$('#t-tol').value;
         if (!(tgt >= 5 && tgt <= 160)) errors['t-target'] = 'Target must be between 5 and 160 m';
         if (!(tol >= 0.5 && tol <= 20)) errors['t-tol'] = 'Tolerance must be between 0.5 and 20 m';
+        const sc = scenario();
+        if (sc.planet === 'custom' && !(sc.g >= 0.5 && sc.g <= 30)) errors['t-gravity'] = 'Enter a gravity between 0.5 and 30 m/s²';
+        if (!(+$('#t-amin').value < +$('#t-amax').value)) errors['t-amax'] = 'Must be greater than the minimum angle';
+        if (!(+$('#t-smin').value < +$('#t-smax').value)) errors['t-smax'] = 'Must be greater than the minimum speed';
+        const ml = $('#t-maxl').value;
+        if (ml === '' || !Number.isInteger(+ml) || +ml < 0 || +ml > 100) errors['t-maxl'] = 'Enter a whole number from 0 to 100';
+        if (!errors['t-gravity'] && !errors['t-target'] && sc.maxRange + tol < tgt) errors['t-smax'] = `The target can't be reached — the furthest shot is about ${Math.round(sc.maxRange)} m`;
       }
       if (type === 'lesson') {
         const filled = sections.filter(s => s.heading.trim() || s.body.trim());
@@ -734,14 +892,19 @@
 
       const content = { questions: qs };
       if (type === 'lesson') content.sections = sections.filter(s => s.heading.trim() || s.body.trim());
-      if (type === 'simulation') Object.assign(content, { simulation: 'projectile', targetDistance: +$('#t-target').value, tolerance: +$('#t-tol').value, instructions: $('#t-instr').value });
+      if (type === 'simulation') Object.assign(content, {
+        simulation: 'projectile', targetDistance: +$('#t-target').value, tolerance: +$('#t-tol').value, instructions: $('#t-instr').value,
+        planet: $('#t-planet').value, ...($('#t-planet').value === 'custom' ? { gravity: +$('#t-gravity').value } : {}),
+        angleMin: +$('#t-amin').value, angleMax: +$('#t-amax').value, speedMin: +$('#t-smin').value, speedMax: +$('#t-smax').value,
+        maxLaunches: +$('#t-maxl').value, showGuide: $('#t-guide').checked,
+      });
       const body = { title, description: $('#t-desc').value, type, subject: $('#t-subject').value, duration_min: dur, pass_mark: +pass, content };
       busy($('#af-save'), 'Saving…', async () => {
         try {
           await api(act ? `/api/activities/${act.id}` : '/api/activities', { method: act ? 'PUT' : 'POST', body });
           m.close(); toast(act ? `"${title}" updated` : `"${title}" created`); onSaved();
         } catch (ex) {
-          const mapped = serverErrorToField(ex.message, [['title', 't-title'], ['pass mark', 't-pass'], ['duration', 't-dur'], ['target', 't-target'], ['tolerance', 't-tol'], ['subject', 't-subject']]);
+          const mapped = serverErrorToField(ex.message, [['title', 't-title'], ['pass mark', 't-pass'], ['duration', 't-dur'], ['target', 't-target'], ['tolerance', 't-tol'], ['subject', 't-subject'], ['gravity', 't-gravity'], ['angle', 't-amax'], ['speed', 't-smax'], ['launch limit', 't-maxl']]);
           if (mapped) showErrors(form, mapped, $('#af-alert')); else $('#af-alert').innerHTML = `${icon('alert')}<span>${esc(ex.message)}</span>`;
         }
       });
@@ -813,6 +976,152 @@
   });
 
   // =====================================================================
+  // ADMIN — Analytics (hand-built, accessible SVG charts)
+  // =====================================================================
+  const shortDay = (d) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  function lineChart(series, { height = 220, label }) {
+    const W = 640, H = height, pl = 34, pr = 12, pt = 14, pb = 28;
+    const n = series[0].points.length, max = Math.max(1, ...series.flatMap(s => s.points.map(p => p.value)));
+    const nice = Math.ceil(max / 4) * 4 || 4;
+    const X = (i) => pl + (i * (W - pl - pr)) / Math.max(1, n - 1), Y = (v) => pt + (H - pt - pb) * (1 - v / nice);
+    const grid = [0, .25, .5, .75, 1].map(f => `<line x1="${pl}" x2="${W - pr}" y1="${Y(nice * f)}" y2="${Y(nice * f)}" class="grid"/><text x="${pl - 6}" y="${Y(nice * f) + 4}" class="axis" text-anchor="end">${Math.round(nice * f)}</text>`).join('');
+    const step = Math.ceil(n / 7);
+    const xs = series[0].points.map((p, i) => i % step === 0 || i === n - 1 ? `<text x="${X(i)}" y="${H - 8}" class="axis" text-anchor="middle">${shortDay(p.day)}</text>` : '').join('');
+    const lines = series.map((s, k) => {
+      const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.value).toFixed(1)}`).join('');
+      const area = k === 0 ? `<path d="${d}L${X(n - 1)},${Y(0)}L${X(0)},${Y(0)}Z" fill="${s.color}" opacity=".12"/>` : '';
+      const dots = s.points.map((p, i) => p.value ? `<circle cx="${X(i)}" cy="${Y(p.value)}" r="3.5" fill="${s.color}"><title>${shortDay(p.day)}: ${p.value} ${s.label.toLowerCase()}</title></circle>` : '').join('');
+      return `${area}<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" ${k ? 'stroke-dasharray="6 4"' : ''}/>${dots}`;
+    }).join('');
+    return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">${grid}${xs}${lines}</svg>
+      <div class="chart-legend">${series.map((s, k) => `<span><i style="background:${s.color}" class="${k ? 'dashed' : ''}"></i>${esc(s.label)}</span>`).join('')}</div>`;
+  }
+  function barChart(items, { height = 200, label, suffix = '', color = '#6d28d9' }) {
+    const W = 640, H = height, pb = 30, pt = 18, gap = 14;
+    const max = Math.max(1, ...items.map(i => i.value));
+    const bw = (W - gap * (items.length + 1)) / items.length;
+    return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">
+      <line x1="0" x2="${W}" y1="${H - pb}" y2="${H - pb}" class="grid"/>
+      ${items.map((it, k) => { const h = (H - pb - pt) * (it.value / max), x = gap + k * (bw + gap), y = H - pb - h;
+        return `<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(h, it.value ? 2 : 0)}" rx="6" fill="${it.color || color}"><title>${esc(it.label)}: ${it.value}${suffix}</title></rect>
+          <text x="${x + bw / 2}" y="${y - 5}" text-anchor="middle" class="bar-val">${it.value}${suffix}</text>
+          <text x="${x + bw / 2}" y="${H - 10}" text-anchor="middle" class="axis">${esc(it.label)}</text>`; }).join('')}
+    </svg>`;
+  }
+  const dataTable = (caption, head, rows) => `<details class="data-table"><summary>View as table</summary><div class="table-wrap"><table><caption class="sr-only">${esc(caption)}</caption>
+    <thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details>`;
+  const pairBar = (label, a, b, sub) => `<div class="pair-row"><div class="pair-label"><strong>${esc(label)}</strong><span class="small muted">${esc(sub)}</span></div>
+    <div class="pair-bars"><div class="pb"><span style="width:${a}%" class="pb-a"></span></div><span class="pb-v">${a}%</span>
+    <div class="pb"><span style="width:${b ?? 0}%" class="pb-b"></span></div><span class="pb-v">${b == null ? '—' : b + '%'}</span></div></div>`;
+
+  let analyticsDays = 30;
+  const adminAnalytics = () => page('analytics', 'Analytics', { stats: 4, cards: 4 }, async (main) => {
+    const d = await api(`/api/admin/analytics?days=${analyticsDays}`);
+    const runs = d.simulationPerformance.reduce((n, x) => n + x.runs, 0), hits = d.simulationPerformance.reduce((n, x) => n + x.hits, 0);
+    const completions = d.completionsByDay.reduce((n, x) => n + x.value, 0);
+    main.innerHTML = `
+      <div class="page-head"><div><h1>Analytics</h1><p class="muted">Learner performance over time and across activities</p></div>
+        <div class="row"><div class="filter inline"><label for="range" class="small">Period</label><select id="range">${[7, 30, 90].map(n => `<option value="${n}" ${analyticsDays === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div>
+          ${exportButton('export-report', 'Export report (CSV)')}</div></div>
+      <div class="grid grid-4">
+        ${statCard('Completions', completions, `in the last ${d.days} days`, 'checkCircle')}
+        ${statCard('Attempts', d.totals.attemptsInPeriod, `in the last ${d.days} days`, 'refresh')}
+        ${statCard('Median score', d.totals.medianScore != null ? d.totals.medianScore + '%' : '—', `${d.totals.scoredCompletions} scored completions`, 'star')}
+        ${statCard('Simulation hit rate', runs ? Math.round(hits / runs * 100) + '%' : '—', `${hits} hits from ${runs} launches`, 'target')}
+      </div>
+      <div class="grid grid-2 mt">
+        <section class="card" aria-labelledby="h-trend"><h2 id="h-trend">Activity over time</h2>
+          ${lineChart([{ label: 'Completions', color: '#6d28d9', points: d.completionsByDay }, { label: 'Attempts', color: '#14213d', points: d.attemptsByDay }], { label: `Completions and attempts per day over the last ${d.days} days` })}
+          ${dataTable('Completions and attempts per day', ['Day', 'Completions', 'Attempts'], d.completionsByDay.map((p, i) => [p.day, p.value, d.attemptsByDay[i].value]))}</section>
+        <section class="card" aria-labelledby="h-dist"><h2 id="h-dist">Score distribution</h2><p class="small muted">Best score of each completed assignment</p>
+          ${barChart(d.scoreDistribution.map(b => ({ label: b.label, value: b.count })), { label: 'Number of completions in each score band' })}
+          ${dataTable('Score distribution', ['Score band', 'Completions'], d.scoreDistribution.map(b => [b.label, b.count]))}</section>
+      </div>
+      <div class="grid grid-2 mt">
+        <section class="card" aria-labelledby="h-perf"><h2 id="h-perf">Activity performance</h2>
+          <div class="pair-legend small"><span><i class="pb-a"></i>Completion rate</span><span><i class="pb-b"></i>Average score</span></div>
+          ${d.activityPerformance.map(a => pairBar(a.title, a.completionRate, a.avg_score, `${a.completed}/${a.assigned} completed · ${a.avg_attempts ?? 0} attempts avg`)).join('') || emptyState({ ico: 'layers', title: 'No activities yet' })}</section>
+        <section class="card" aria-labelledby="h-coh"><h2 id="h-coh">Cohort comparison</h2>
+          <div class="pair-legend small"><span><i class="pb-a"></i>Completion rate</span><span><i class="pb-b"></i>Average score</span></div>
+          ${d.cohortPerformance.map(c => pairBar(c.cohort, c.completionRate, c.avg_score, `${c.learners} learner${c.learners === 1 ? '' : 's'} · ${c.completed}/${c.assigned} completed`)).join('') || emptyState({ ico: 'users', title: 'No cohorts yet' })}</section>
+      </div>
+      <div class="grid grid-2 mt">
+        <section class="card" aria-labelledby="h-simp"><h2 id="h-simp">Simulation hit rates</h2>
+          ${d.simulationPerformance.length ? barChart(d.simulationPerformance.map(x => ({ label: x.title.length > 18 ? x.title.slice(0, 17) + '…' : x.title, value: x.hitRate })), { label: 'Hit rate per simulation', suffix: '%' })
+            + dataTable('Simulation hit rates', ['Simulation', 'Launches', 'Hits', 'Hit rate', 'Learners'], d.simulationPerformance.map(x => [x.title, x.runs, x.hits, x.hitRate + '%', x.learners]))
+            : emptyState({ ico: 'flask', title: 'No simulations yet' })}</section>
+        <section class="card" aria-labelledby="h-top"><h2 id="h-top">Top learners</h2>
+          ${d.topLearners.length ? `<ol class="leaderboard">${d.topLearners.map((l, k) => `<li><span class="rank">${k + 1}</span><span class="avatar">${initials(l.name)}</span>
+            <a class="grow" href="#/admin/learners/${l.id}"><strong>${esc(l.name)}</strong><span class="small muted">${esc(l.cohort || '')}</span></a>
+            <span class="small">${l.completionRate}% done</span><span class="badge b-primary">${l.avg_score ?? '—'}${l.avg_score != null ? '%' : ''}</span></li>`).join('')}</ol>`
+            : emptyState({ ico: 'trophy', title: 'No learner data yet' })}</section>
+      </div>`;
+    $('#range').onchange = (e) => { analyticsDays = +e.target.value; adminAnalytics(); };
+    bindExport($('#export-report'), '/api/reports/learners.csv');
+    startLive(() => { clearTimeout(adminAnalytics.t); adminAnalytics.t = setTimeout(() => { if ($('#h-trend')) adminAnalytics(); }, 1500); });
+  });
+
+  // =====================================================================
+  // ADMIN — Audit log
+  // =====================================================================
+  const auditFilters = { q: '', action: '', from: '', to: '', page: 1, entityId: '' };
+  const adminAudit = (query) => page('audit', 'Audit log', { stats: 0, cards: 0 }, async (main) => {
+    if (query?.get('entityId')) { Object.assign(auditFilters, { entityId: query.get('entityId'), page: 1 }); history.replaceState(null, '', '#/admin/audit'); }
+    main.innerHTML = `
+      <div class="page-head"><div><h1>Audit log ${liveChip()}</h1><p class="muted">Every sign-in, change, submission, launch and export — who did it and when</p></div></div>
+      <div class="card">
+        <form class="toolbar" id="audit-filters" role="search">
+          <div class="search grow"><label for="aq" class="sr-only">Search the audit log</label>${icon('search')}<input id="aq" type="search" placeholder="Search by name or description…" value="${esc(auditFilters.q)}"></div>
+          <div class="filter"><label for="aaction" class="small">Action</label><select id="aaction"><option value="">All actions</option></select></div>
+          <div class="filter"><label for="afrom" class="small">From</label><input type="date" id="afrom" value="${esc(auditFilters.from)}"></div>
+          <div class="filter"><label for="ato" class="small">To</label><input type="date" id="ato" value="${esc(auditFilters.to)}"></div>
+          ${auditFilters.entityId ? `<button type="button" class="btn btn-sm" id="clear-entity">${icon('x', { size: 14 })}Learner #${esc(auditFilters.entityId)}</button>` : ''}
+        </form>
+        <p class="small muted" id="audit-count" aria-live="polite"></p>
+        <div id="audit-table"></div>
+        <nav class="pager" aria-label="Audit log pages" id="pager"></nav>
+      </div>`;
+    let timer, reqId = 0;
+    const load = async () => {
+      const my = ++reqId; $('#audit-table').classList.add('dim'); $('#audit-table').setAttribute('aria-busy', 'true');
+      try {
+        const qs = new URLSearchParams(Object.fromEntries(Object.entries({ ...auditFilters, limit: 20 }).filter(([, v]) => v !== '' && v != null)));
+        const d = await api(`/api/admin/audit?${qs}`);
+        if (my !== reqId) return;
+        const sel = $('#aaction');
+        if (sel.options.length === 1) {
+          const groups = [...new Set(d.actions.map(a => a.split('.')[0]))];
+          sel.innerHTML = '<option value="">All actions</option>' + groups.map(g => `<optgroup label="${esc(g[0].toUpperCase() + g.slice(1))}">${d.actions.filter(a => a.startsWith(g + '.')).map(a => `<option value="${a}" ${auditFilters.action === a ? 'selected' : ''}>${esc(actionLabel(a))}</option>`).join('')}</optgroup>`).join('');
+        }
+        $('#audit-count').textContent = `${d.total} event${d.total === 1 ? '' : 's'}`;
+        $('#audit-table').innerHTML = d.rows.length ? `<div class="table-wrap"><table class="responsive"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody>
+          ${d.rows.map(e => `<tr><td class="nowrap">${fmtTime(e.created_at)}</td>
+            <td>${e.actor_name ? `<div class="person"><span class="avatar avatar-sm">${initials(e.actor_name)}</span><div><strong>${esc(e.actor_name)}</strong><div class="small muted">${esc(e.actor_role || '')}</div></div></div>` : '<span class="muted">Anonymous</span>'}</td>
+            <td><span class="badge tone-${actionTone(e.action)}">${esc(actionLabel(e.action))}</span></td>
+            <td>${esc(e.summary)}${e.ip ? `<div class="small muted">IP ${esc(e.ip)}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+          : emptyState({ ico: 'history', title: 'No events match these filters', action: '<button class="btn" id="audit-clear">Clear filters</button>' });
+        $('#audit-clear')?.addEventListener('click', () => { Object.assign(auditFilters, { q: '', action: '', from: '', to: '', page: 1, entityId: '' }); adminAudit(); });
+        $('#pager').innerHTML = d.pages > 1 ? `<button class="btn btn-sm" id="prev" ${d.page <= 1 ? 'disabled' : ''}>${icon('arrowLeft', { size: 14 })}Newer</button>
+          <span class="small">Page ${d.page} of ${d.pages}</span><button class="btn btn-sm" id="next" ${d.page >= d.pages ? 'disabled' : ''}>Older${icon('arrowRight', { size: 14 })}</button>` : '';
+        $('#prev')?.addEventListener('click', () => { auditFilters.page--; load(); });
+        $('#next')?.addEventListener('click', () => { auditFilters.page++; load(); });
+        enhanceTables($('#audit-table'));
+      } catch (ex) {
+        if (my === reqId) $('#audit-table').innerHTML = `<div class="inline-error" role="alert">${icon('alert')}<span>${esc(ex.message)}</span><button class="btn btn-sm" id="reload">Try again</button></div>`;
+        $('#reload')?.addEventListener('click', load);
+      } finally { if (my === reqId) { $('#audit-table').classList.remove('dim'); $('#audit-table').removeAttribute('aria-busy'); } }
+    };
+    $('#aq').oninput = (e) => { auditFilters.q = e.target.value; auditFilters.page = 1; clearTimeout(timer); timer = setTimeout(load, 250); };
+    $('#aaction').onchange = (e) => { auditFilters.action = e.target.value; auditFilters.page = 1; load(); };
+    $('#afrom').onchange = (e) => { auditFilters.from = e.target.value; auditFilters.page = 1; load(); };
+    $('#ato').onchange = (e) => { auditFilters.to = e.target.value; auditFilters.page = 1; load(); };
+    $('#audit-filters').onsubmit = (e) => e.preventDefault();
+    $('#clear-entity')?.addEventListener('click', () => { auditFilters.entityId = ''; adminAudit(); });
+    await load();
+    startLive(() => { if (auditFilters.page === 1) { clearTimeout(timer); timer = setTimeout(load, 300); } });
+  });
+
+  // =====================================================================
   // LEARNER — Dashboard
   // =====================================================================
   let learnerTab = 'todo';
@@ -868,27 +1177,73 @@
     const c = a.content;
     const questions = c.questions || [];
     const steps = [a.type === 'lesson' && 'Read', a.type === 'simulation' && 'Experiment', questions.length && 'Answer', 'Submit'].filter(Boolean);
+    // Resume: prefer whichever copy is newer — the server's, or an unsynced backup saved on this device.
+    const localKey = `nudle_progress_${state.user.id}_${id}`;
+    let local = null; try { local = JSON.parse(localStorage.getItem(localKey) || 'null'); } catch { /* ignore */ }
+    const serverAt = a.progress?.savedAt ? Date.parse(a.progress.savedAt.replace(' ', 'T') + 'Z') : 0;
+    const saved = local && local.at > serverAt ? local.state : a.progress;
+    const resumed = !!saved && a.status !== 'completed';
     main.innerHTML = `
       <div class="player">
         ${crumbs([['My activities', '#/learn'], [a.title]])}
         <div class="row tight">${typeBadge(a.type)}<span class="badge b-neutral">${esc(a.subject)}</span><span class="small muted with-icon">${icon('clock', { size: 14 })}${a.duration_min} min</span><span class="small muted with-icon">${icon('target', { size: 14 })}Pass mark ${a.pass_mark}%</span>${a.status === 'completed' ? statusBadge(a) : ''}</div>
         <h1>${esc(a.title)}</h1><p class="muted">${esc(a.description)}</p>
         <ol class="stepper" aria-label="Steps">${steps.map((s, i) => `<li><span>${i + 1}</span>${s}</li>`).join('')}</ol>
+        ${resumed ? `<div class="resume-banner" role="status">${icon('save')}<div class="grow"><strong>Welcome back — we restored your progress.</strong>
+          <span class="small">${saved.angle != null ? `Angle ${saved.angle}°, speed ${saved.speed} m/s. ` : ''}${saved.answers?.filter(x => x != null).length ? `${saved.answers.filter(x => x != null).length} answer(s) restored.` : ''}</span></div>
+          <button class="btn btn-sm" id="start-over">${icon('refresh', { size: 14 })}Start over</button></div>` : ''}
         <div id="result" tabindex="-1"></div>
         ${a.type === 'lesson' ? `<section class="card lesson" aria-label="Lesson content">${(c.sections || []).map(s => `<div class="lesson-section">${s.heading ? `<h2>${esc(s.heading)}</h2>` : ''}<p>${esc(s.body)}</p></div>`).join('')}</section>` : ''}
-        ${a.type === 'simulation' ? simulationMarkup(c) : ''}
+        ${a.type === 'simulation' ? simulationMarkup(c, saved) : ''}
         ${questions.length ? `<section class="card" aria-labelledby="h-q"><h2 id="h-q">${a.type === 'quiz' ? 'Questions' : 'Check your understanding'}</h2>
           <p class="small muted" id="q-progress" aria-live="polite">0 of ${questions.length} answered</p>
           ${questions.map((q, i) => `<fieldset class="question" id="qf-${i}" aria-describedby="qe-${i}"><legend><span class="q-num">${i + 1}</span>${esc(q.q)}</legend>
             <div class="options">${q.options.map((o, oi) => `<label class="option" data-q="${i}" data-o="${oi}"><input type="radio" name="q${i}" value="${oi}"><span class="radio-mark" aria-hidden="true"></span><span class="opt-text">${esc(o)}</span><span class="opt-fb"></span></label>`).join('')}</div>
             <p class="field-error" id="qe-${i}" aria-live="polite"></p></fieldset>`).join('')}</section>` : ''}
-        <div class="submit-bar"><button class="btn btn-primary btn-lg" id="submit">${icon('check')}Submit activity</button><p class="small muted" id="sub-msg" aria-live="polite"></p></div>
+        <div class="submit-bar"><button class="btn btn-primary btn-lg" id="submit">${icon('check')}Submit activity</button><p class="small muted" id="sub-msg" aria-live="polite"></p>
+          <span class="save-status small" id="save-status" role="status" aria-live="polite"></span></div>
       </div>`;
 
     const updateCount = () => { const n = questions.filter((_, i) => $(`input[name="q${i}"]:checked`)).length; if ($('#q-progress')) $('#q-progress').textContent = `${n} of ${questions.length} answered`; };
     $$('.option input', main).forEach(inp => inp.addEventListener('change', () => { const fs = inp.closest('fieldset'); fs.classList.remove('invalid'); $('.field-error', fs).textContent = ''; updateCount(); }));
 
-    const sim = a.type === 'simulation' ? setupSimulation(c, id, a.simulationRuns || []) : null;
+    // Restore answers, then autosave every change (debounced). If the network fails the state is kept
+    // on this device and synced automatically when the connection returns.
+    (saved?.answers || []).forEach((v, i) => { if (v != null) { const el = $(`input[name="q${i}"][value="${v}"]`); if (el) el.checked = true; } });
+    updateCount();
+    const statusEl = $('#save-status');
+    const setSave = (st) => {
+      statusEl.className = `save-status small ${st}`;
+      statusEl.innerHTML = st === 'saving' ? `<span class="spinner" aria-hidden="true"></span>Saving…` : st === 'saved' ? `${icon('check', { size: 14 })}Progress saved`
+        : st === 'offline' ? `${icon('wifiOff', { size: 14 })}Saved on this device — will sync when you're back online` : '';
+    };
+    let saveTimer, pending = null;
+    const collect = () => {
+      const st = { answers: questions.map((_, i) => { const el = $(`input[name="q${i}"]:checked`); return el ? +el.value : null; }) };
+      if (sim) Object.assign(st, sim.position());
+      return st;
+    };
+    const flush = async () => {
+      if (!pending || !$('#save-status')) return;
+      const st = pending; pending = null;
+      setSave('saving');
+      try { await api(`/api/me/assignments/${id}/progress`, { method: 'PUT', body: st, retries: 1 }); localStorage.removeItem(localKey); setSave('saved'); }
+      catch (ex) {
+        if (ex.network || ex.status >= 500) { try { localStorage.setItem(localKey, JSON.stringify({ at: Date.now(), state: st })); } catch { /* storage full */ } pending = pending || st; setSave('offline'); }
+        else setSave('');
+      }
+    };
+    const autosave = () => { if (a.status === 'completed' && !resumed) return; pending = collect(); setSave('saving'); clearTimeout(saveTimer); saveTimer = setTimeout(flush, 700); };
+    onReconnect = () => { if (pending) flush(); };
+    $$('.option input', main).forEach(inp => inp.addEventListener('change', autosave));
+    if (local && local.at > serverAt) { pending = local.state; flush(); } // sync an unsynced backup straight away
+    $('#start-over')?.addEventListener('click', async (e) => {
+      if (!(await confirmDialog('Start this activity over? Your saved answers and slider positions will be cleared (your launch history is kept).', 'Start over', false))) return;
+      await busy(e.currentTarget, 'Clearing…', async () => { await api(`/api/me/assignments/${id}/progress`, { method: 'DELETE' }).catch(() => {}); localStorage.removeItem(localKey); });
+      learnerPlayer(id);
+    });
+
+    const sim = a.type === 'simulation' ? setupSimulation(c, id, a.simulationRuns || [], { start: saved, launchesUsed: a.launchesUsed || 0, onChange: autosave }) : null;
 
     $('#submit').onclick = async () => {
       const answers = questions.map((_, i) => { const el = $(`input[name="q${i}"]:checked`); return el ? Number(el.value) : null; });
@@ -904,9 +1259,11 @@
         $(`#qf-${missing[0]} input`).focus(); return;
       }
       $('#sub-msg').textContent = '';
+      const key = newKey(); // same key for every retry of this click → never counted twice
       await busy($('#submit'), 'Submitting…', async () => {
         try {
-          const r = await api(`/api/me/assignments/${id}/submit`, { method: 'POST', body: { answers, simulationRunId: sim ? sim.lastRun().id : undefined } });
+          const r = await api(`/api/me/assignments/${id}/submit`, { method: 'POST', idempotencyKey: key, body: { answers, simulationRunId: sim ? sim.lastRun().id : undefined } });
+          clearTimeout(saveTimer); pending = null; if (r.passed) { localStorage.removeItem(localKey); setSave(''); }
           r.feedback.forEach((f, i) => $$(`.option[data-q="${i}"]`).forEach(o => {
             o.classList.remove('correct', 'wrong'); $('input', o).disabled = true; const fb = $('.opt-fb', o); fb.innerHTML = '';
             if (+o.dataset.o === f.correctAnswer) { o.classList.add('correct'); fb.innerHTML = `${icon('check', { size: 16 })}<span class="sr-only">Correct answer</span>`; }
@@ -948,10 +1305,15 @@
   // =====================================================================
   // SIMULATION — projectile lab
   // =====================================================================
-  function simulationMarkup(c) {
+  const simLimits = (c) => ({ aMin: c.angleMin ?? 5, aMax: c.angleMax ?? 85, sMin: c.speedMin ?? 5, sMax: c.speedMax ?? 40, g: c.gravity ?? 9.8, world: PLANETS[c.planet] || PLANETS.earth });
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  function simulationMarkup(c, start) {
+    const L = simLimits(c);
+    const a0 = clamp(Math.round(start?.angle ?? 45), L.aMin, L.aMax), s0 = clamp(start?.speed ?? Math.round((L.sMin + L.sMax) / 2 * 2) / 2, L.sMin, L.sMax);
     return `<section class="card sim" aria-labelledby="h-sim">
       <div class="sim-head"><div><h2 id="h-sim">${icon('flask')}Projectile lab</h2><p class="muted">${esc(c.instructions || `Land within ${c.tolerance} m of the flag at ${c.targetDistance} m.`)}</p></div>
-        <div class="sim-goal"><span class="small muted">Target</span><strong>${c.targetDistance} m</strong><span class="small muted">± ${c.tolerance} m</span></div></div>
+        <div class="sim-goals"><div class="sim-goal world"><span class="small muted">World</span><strong>${esc(L.world.label)}</strong><span class="small muted">g = ${L.g} m/s²</span></div>
+          <div class="sim-goal"><span class="small muted">Target</span><strong>${c.targetDistance} m</strong><span class="small muted">± ${c.tolerance} m</span></div></div></div>
       <div class="sim-stage">
         <canvas id="sim-canvas" tabindex="0" role="img" aria-roledescription="interactive simulation"
           aria-label="Projectile simulation. Target at ${c.targetDistance} metres. Use left and right arrows to change angle, up and down arrows to change speed, Enter to launch."
@@ -967,29 +1329,31 @@
       <div class="sim-controls">
         <div class="slider-field">
           <div class="slider-top"><label for="ang">Launch angle</label><output id="ang-v" for="ang">45°</output></div>
-          <input id="ang" type="range" min="5" max="85" step="1" value="45" aria-valuetext="45 degrees">
-          <div class="slider-scale" aria-hidden="true"><span>5°</span><span>45°</span><span>85°</span></div>
+          <input id="ang" type="range" min="${L.aMin}" max="${L.aMax}" step="1" value="${a0}" aria-valuetext="${a0} degrees">
+          <div class="slider-scale" aria-hidden="true"><span>${L.aMin}°</span><span>${Math.round((L.aMin + L.aMax) / 2)}°</span><span>${L.aMax}°</span></div>
         </div>
         <div class="slider-field">
           <div class="slider-top"><label for="spd">Launch speed</label><output id="spd-v" for="spd">15.0 m/s</output></div>
-          <input id="spd" type="range" min="5" max="40" step="0.5" value="15" aria-valuetext="15 metres per second">
-          <div class="slider-scale" aria-hidden="true"><span>5</span><span>22.5</span><span>40 m/s</span></div>
+          <input id="spd" type="range" min="${L.sMin}" max="${L.sMax}" step="0.5" value="${s0}" aria-valuetext="${s0} metres per second">
+          <div class="slider-scale" aria-hidden="true"><span>${L.sMin}</span><span>${(L.sMin + L.sMax) / 2}</span><span>${L.sMax} m/s</span></div>
         </div>
         <div class="sim-actions">
           <button class="btn btn-primary btn-lg" id="launch">${icon('rocket')}Launch</button>
+          ${c.maxLaunches ? `<p class="launches-left small" id="launches-left" aria-live="polite"></p>` : ''}
           <p class="sim-predict small muted" id="sim-predict"></p>
         </div>
       </div>
       <div class="sim-result" id="sim-msg" role="status" aria-live="polite"></div>
       <details class="sim-help"><summary>${icon('help', { size: 16 })}How does it work?</summary>
         <p>The projectile follows the path of an object thrown with no air resistance. Its range is
-        <strong>R = v² · sin(2θ) ÷ g</strong>, where v is speed, θ is angle and g = 9.8 m/s². Every launch is checked and saved by the server.</p></details>
+        <strong>R = v² · sin(2θ) ÷ g</strong>, where v is speed, θ is angle and g is gravity — here <strong>${L.g} m/s²</strong> (${esc(L.world.label)}). Every launch is checked and saved by the server.${c.showGuide === false ? ' The aiming guide is switched off for this challenge.' : ''}</p></details>
       <div class="sim-history"><h3>Your launches <span class="small muted" id="hist-count"></span></h3><ol id="sim-history" class="launch-list"></ol></div>
     </section>`;
   }
 
-  function setupSimulation(c, assignmentId, previousRuns) {
-    const G = 9.8;
+  function setupSimulation(c, assignmentId, previousRuns, { launchesUsed = 0, onChange = () => {} } = {}) {
+    const L = simLimits(c), G = L.g, W0 = L.world;
+    let used = launchesUsed;
     const canvas = $('#sim-canvas'), ctx = canvas.getContext('2d');
     const ang = $('#ang'), spd = $('#spd');
     const runs = previousRuns.map(r => ({ id: r.id, angle: r.angle, speed: r.speed, range: r.range_m, target: r.target_m, hit: !!r.hit }));
@@ -1023,7 +1387,7 @@
     function drawScene(g) {
       // Sky
       const sky = ctx.createLinearGradient(0, 0, 0, g.groundY);
-      sky.addColorStop(0, '#1b2550'); sky.addColorStop(.55, '#4c2a8f'); sky.addColorStop(1, '#b9a3f0');
+      sky.addColorStop(0, W0.sky[0]); sky.addColorStop(.55, W0.sky[1]); sky.addColorStop(1, W0.sky[2]);
       ctx.fillStyle = sky; ctx.fillRect(0, 0, W, g.groundY);
       // Stars
       ctx.fillStyle = 'rgba(235,255,248,.7)';
@@ -1034,11 +1398,11 @@
         for (let x = 0; x <= W; x += 8) ctx.lineTo(x, g.groundY - base - Math.sin(x * freq + phase) * amp);
         ctx.lineTo(W, g.groundY); ctx.fill();
       };
-      hill('rgba(109,40,217,.35)', H * .16, H * .05, .006, 1);
-      hill('rgba(20,33,61,.45)', H * .08, H * .04, .011, 3);
+      hill(W0.hills[0], H * .16, H * .05, .006, 1);
+      hill(W0.hills[1], H * .08, H * .04, .011, 3);
       // Ground
       const grd = ctx.createLinearGradient(0, g.groundY, 0, H);
-      grd.addColorStop(0, '#14213d'); grd.addColorStop(1, '#0c1630');
+      grd.addColorStop(0, W0.ground[0]); grd.addColorStop(1, W0.ground[1]);
       ctx.fillStyle = grd; ctx.fillRect(0, g.groundY, W, H - g.groundY);
       // Distance markers
       ctx.font = '600 11px Poppins, system-ui, sans-serif'; ctx.textAlign = 'center';
@@ -1087,7 +1451,7 @@
         ctx.fillStyle = r.hit ? '#86efac' : 'rgba(235,255,248,.5)'; ctx.beginPath(); ctx.arc(g.X(r.range), g.groundY, 3, 0, Math.PI * 2); ctx.fill();
       });
       // Aiming guide: the first part of the predicted path (not the whole thing — that would give the answer away)
-      if (!flight) {
+      if (!flight && c.showGuide !== false) {
         const p = physics(+ang.value, +spd.value);
         drawPath(g, p, p.T * 0.32, { strokeStyle: 'rgba(235,255,248,.9)', lineWidth: 2, dash: [6, 6], lineCap: 'round' });
       }
@@ -1126,8 +1490,9 @@
       $('#spd-v').textContent = `${(+spd.value).toFixed(1)} m/s`; spd.setAttribute('aria-valuetext', `${spd.value} metres per second`);
       const p = physics(+ang.value, +spd.value);
       $('#sim-predict').textContent = `Flight time ≈ ${p.T.toFixed(2)} s · peak ≈ ${p.peak.toFixed(1)} m`;
-      ang.style.setProperty('--fill', `${((ang.value - 5) / 80) * 100}%`);
-      spd.style.setProperty('--fill', `${((spd.value - 5) / 35) * 100}%`);
+      ang.style.setProperty('--fill', `${((ang.value - L.aMin) / (L.aMax - L.aMin)) * 100}%`);
+      spd.style.setProperty('--fill', `${((spd.value - L.sMin) / (L.sMax - L.sMin)) * 100}%`);
+      updateLaunchesLeft();
       if (!flight) draw();
     }
 
@@ -1139,16 +1504,23 @@
           <span class="launch-range">${r.range} m</span>${r.hit ? `<span class="badge b-success">${icon('target', { size: 12 })}Hit</span>` : `<span class="badge b-danger">${icon('x', { size: 12 })}${Math.abs(diff)} m ${diff < 0 ? 'short' : 'long'}</span>`}
           <button class="btn btn-sm btn-ghost" data-reuse="${i}" aria-label="Use ${r.angle} degrees and ${r.speed} metres per second again">${icon('refresh', { size: 14 })}Reuse</button></li>`;
       }).join('') : '<li class="empty-launch">No launches yet — set your angle and speed, then press Launch.</li>';
-      $$('[data-reuse]').forEach(b => b.onclick = () => { const r = runs[+b.dataset.reuse]; ang.value = r.angle; spd.value = r.speed; updateControls(); ang.focus(); });
+      $$('[data-reuse]').forEach(b => b.onclick = () => { const r = runs[+b.dataset.reuse]; ang.value = r.angle; spd.value = r.speed; updateControls(); onChange(); ang.focus(); });
     }
 
+    function updateLaunchesLeft() {
+      if (!c.maxLaunches) return;
+      const left = Math.max(0, c.maxLaunches - used);
+      $('#launches-left').innerHTML = left ? `${left} of ${c.maxLaunches} launches left` : `<span class="text-danger">No launches left</span>`;
+      if (!flight) $('#launch').disabled = left === 0;
+    }
     async function launch() {
       if (flight) return;
+      if (c.maxLaunches && used >= c.maxLaunches) return;
       const angle = +ang.value, speed = +spd.value;
       const btn = $('#launch');
       let run;
       await busy(btn, 'Launching…', async () => {
-        try { run = await api(`/api/me/assignments/${assignmentId}/simulation-runs`, { method: 'POST', body: { angle, speed } }); }
+        try { run = await api(`/api/me/assignments/${assignmentId}/simulation-runs`, { method: 'POST', idempotencyKey: newKey(), body: { angle, speed } }); used++; }
         catch (ex) { $('#sim-msg').innerHTML = `<div class="sim-feedback miss">${icon('alert')}<span>${esc(ex.message)}</span></div>`; }
       });
       if (!run) return;
@@ -1165,7 +1537,7 @@
           ? `<div class="sim-feedback hit">${icon('target')}<div><strong>Bullseye! Landed at ${run.range} m.</strong><span>You're within ${c.tolerance} m of the target. Answer the question below and submit.</span></div></div>`
           : `<div class="sim-feedback miss">${icon('x')}<div><strong>${Math.abs(diff)} m ${diff < 0 ? 'short' : 'too far'} — landed at ${run.range} m.</strong><span>${diff < 0 ? 'Try more speed, or an angle closer to 45°.' : 'Try less speed, or move the angle away from 45°.'}</span></div></div>`;
         showBanner(run.hit ? 'BULLSEYE!' : `${Math.abs(diff)} m ${diff < 0 ? 'short' : 'long'}`, run.hit ? 'hit' : 'miss');
-        renderHistory(); kick();
+        renderHistory(); updateLaunchesLeft(); kick();
       };
       if (reducedMotion()) { flight = null; draw(); finish(); return; }
       const dur = Math.min(2600, 700 + p.T * 420), start = performance.now();
@@ -1186,13 +1558,15 @@
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); launch(); }
     });
     ang.addEventListener('input', updateControls); spd.addEventListener('input', updateControls);
+    ang.addEventListener('change', onChange); spd.addEventListener('change', onChange);
+    canvas.addEventListener('keyup', (e) => { if (e.key.startsWith('Arrow')) onChange(); });
     $('#launch').onclick = launch;
     const ro = new ResizeObserver(() => resize()); ro.observe(canvas.parentElement);
     // Keep the flag waving gently (cheap redraw, paused when reduced motion is requested).
     if (!reducedMotion()) { const idle = () => { if (!canvas.isConnected) { ro.disconnect(); return; } if (!flight && !particles.length) draw(); setTimeout(() => requestAnimationFrame(idle), 120); }; idle(); }
     updateControls(); renderHistory(); resize();
     if (lastRun?.hit) $('#sim-msg').innerHTML = `<div class="sim-feedback hit">${icon('target')}<div><strong>You've already hit the target (${lastRun.range} m).</strong><span>You can submit, or keep experimenting.</span></div></div>`;
-    return { lastRun: () => lastRun };
+    return { lastRun: () => lastRun, position: () => ({ angle: +ang.value, speed: +spd.value }) };
   }
 
   // =====================================================================
@@ -1235,6 +1609,7 @@
     const path = rawPath || '/';
     const query = new URLSearchParams(qs || '');
     $('#modal-root').innerHTML = ''; document.body.classList.remove('modal-open');
+    stopLive(); onReconnect = null;
     if (!state.token) { if (path !== '/login') location.hash = '#/login'; else renderLogin(); return; }
     try {
       if (!state.user) state.user = (await api('/api/auth/me')).user;
@@ -1248,11 +1623,21 @@
     if (isAdmin && (m = path.match(/^\/admin\/learners\/(\d+)$/))) return adminLearnerDetail(m[1]);
     if (isAdmin && path === '/admin/activities') return adminActivities(query);
     if (isAdmin && (m = path.match(/^\/admin\/activities\/(\d+)$/))) return adminActivityDetail(m[1]);
+    if (isAdmin && path === '/admin/analytics') return adminAnalytics();
+    if (isAdmin && path === '/admin/audit') return adminAudit(query);
     if (!isAdmin && path === '/learn') return learnerDashboard();
     if (!isAdmin && path === '/learn/progress') return learnerProgress();
     if (!isAdmin && (m = path.match(/^\/learn\/activity\/(\d+)$/))) return learnerPlayer(m[1]);
     location.hash = home;
   }
+  // Network status: show a banner while offline and resume pending work when the connection returns.
+  let onReconnect = null;
+  const netBanner = document.createElement('div');
+  netBanner.id = 'net-banner'; netBanner.setAttribute('role', 'status'); netBanner.hidden = navigator.onLine !== false;
+  netBanner.innerHTML = `${icon('wifiOff')}<span>You're offline. Your progress is being kept on this device and will sync when you reconnect.</span>`;
+  document.body.prepend(netBanner);
+  window.addEventListener('offline', () => { netBanner.hidden = false; });
+  window.addEventListener('online', () => { netBanner.hidden = true; toast('Back online'); if (onReconnect) onReconnect(); });
   window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); });
   route();
 })();

@@ -31,6 +31,28 @@ A web-based learning platform that lets educational institutions manage learners
 | Front end | Dependency-free single-page app (vanilla JS, hash routing), custom accessible component set, responsive CSS, canvas simulation |
 | Tests     | Node's built-in test runner – unit + API integration + statistics accuracy tests |
 
+## Advanced technical features (Challenge 5)
+
+All eight stretch objectives are implemented and covered by automated tests (`test/advanced.test.js`).
+
+<p>
+  <img src="docs/screenshots/c5-05-analytics.png" alt="Analytics page with charts" width="49%">
+  <img src="docs/screenshots/c5-01-live-dashboard.png" alt="Live dashboard" width="49%">
+</p>
+
+| Feature | How it works | Where to see it |
+|---|---|---|
+| **Real-time dashboard updates** | Server-Sent Events (`GET /api/admin/events`). An in-process event bus publishes every audited action; the dashboard, analytics and audit pages subscribe and refresh automatically. The browser uses a streaming `fetch` so the bearer token stays in a header (never in the URL), reconnects with exponential backoff, and shows a **Live / Reconnecting…** indicator. Changed numbers briefly highlight; a **Live activity** feed shows events as they happen. | Dashboard ([screenshot](docs/screenshots/c5-01-live-dashboard.png)) — open it, then launch a simulation as a learner in another window |
+| **Visual analytics & performance charts** | `GET /api/admin/analytics?days=7|30|90`. Hand-built, accessible SVG charts: completions/attempts over time (line), score distribution (bars), activity performance and cohort comparison (paired bars: completion rate vs average score), simulation hit rates, top learners. Every chart has a text label for screen readers and a **View as table** option. | Analytics ([screenshot](docs/screenshots/c5-05-analytics.png), [phone](docs/screenshots/c5-m1-analytics.png)) |
+| **Simulation progress saving & resuming** | `PUT/DELETE /api/me/assignments/:id/progress` stores slider positions and chosen answers (table `assignment_progress`). Changes autosave (debounced) with a **Saving… / Progress saved** indicator. Reopening the activity restores everything with a **Welcome back** banner and a **Start over** option. If the network is down, progress is kept on the device and synced automatically when the connection returns. Cleared once the activity is passed. | Any activity ([screenshot](docs/screenshots/c5-02-resume.png)) |
+| **Automated tests for critical functionality** | **49 tests** (Node's built-in runner): unit tests (grading, physics, validation, tokens, passwords, CSV escaping), API integration tests (auth, roles, CRUD, privacy), statistics accuracy, and Challenge 5 features (live stream, analytics, progress, audit, exports, scenarios, idempotency, timeouts, oversized/aborted requests). Plus browser checks with Playwright and axe-core (0 accessibility violations). | `npm test` |
+| **Activity history & audit logging** | Append-only `audit_log` table recording who, what, which record, when and from which IP: logins (and failed logins — passwords are never stored), learner and activity changes, assignments, submissions, simulation launches and report exports. **Audit log** page with search, action/date filters, pagination and live refresh; each learner page shows that learner's **Activity history** timeline. | Audit log ([screenshot](docs/screenshots/c5-06-audit-log.png)), learner page ([screenshot](docs/screenshots/c5-07-learner-history.png)) |
+| **Exportable learner performance reports** | `GET /api/reports/learners.csv` (all learners) and `/api/reports/learners/:id.csv` (one learner's assignments). Excel-friendly UTF-8 CSV, properly quoted, and protected against spreadsheet formula injection. **Print / PDF** on a learner's page produces a clean printable report via a print stylesheet. | Learners → **Export CSV**; Analytics → **Export report**; learner page → **Print / PDF** ([screenshot](docs/screenshots/c5-08-print-report.png)) |
+| **Configurable simulation scenarios** | Each simulation activity can set the world (**Earth, Moon, Mars, Jupiter or custom gravity**), allowed angle and speed ranges, a launch limit, and whether the aiming guide is shown. The editor previews the furthest possible shot and blocks impossible scenarios; the server re-validates and grades every launch with the scenario's own gravity and limits. The scene's colours change per world. Demo: **Lunar Launch Challenge**. | Activity editor ([screenshot](docs/screenshots/c5-09-scenario-editor.png)), Moon lab ([screenshot](docs/screenshots/c5-04-moon-scenario.png)) |
+| **Robust handling of invalid or interrupted requests** | **Idempotency keys** on submissions and launches: a retried request replays the stored response instead of counting twice. **Request timeouts** (503 `TIMEOUT` instead of hanging). The client aborts stalled requests, **retries** safe requests with exponential backoff, shows an **offline banner**, and keeps unsaved work locally. Client disconnects mid-request are handled without crashing; malformed JSON, wrong content types, oversized bodies and out-of-range values all return clear 4xx errors. | Turn off Wi-Fi while answering a quiz ([screenshot](docs/screenshots/c5-03-offline.png)) |
+
+New database tables (migration v3): `audit_log`, `assignment_progress`, `idempotency_keys`.
+
 ## UI & UX design (Challenge 4)
 
 <p>
@@ -163,7 +185,7 @@ All seeded learners (liam@, sofia@, noah@, priya@ …@nudle.edu) use `learner123
 Other scripts:
 
 ```bash
-npm test        # unit, API and statistics tests (in-memory database)
+npm test        # 49 unit, API, statistics and advanced-feature tests (in-memory database)
 ```
 
 ```bash
@@ -213,8 +235,14 @@ test/
 | GET | `/api/me/assignments` | learner | My assignments + summary |
 | GET | `/api/me/assignments/:id` | learner | Activity content (answers hidden) |
 | POST | `/api/me/assignments/:id/start` | learner | Mark in progress |
-| POST | `/api/me/assignments/:id/simulation-runs` | learner | Launch simulation; server computes and stores result |
-| POST | `/api/me/assignments/:id/submit` | learner | Submit; graded on server |
+| POST | `/api/me/assignments/:id/simulation-runs` | learner | Launch simulation; server computes and stores result (supports `Idempotency-Key`) |
+| PUT / DELETE | `/api/me/assignments/:id/progress` | learner | Save / clear work-in-progress (resume later) |
+| GET | `/api/admin/events` | admin | Live updates (Server-Sent Events) |
+| GET | `/api/admin/analytics?days=30` | admin | Charts data |
+| GET | `/api/admin/audit` | admin | Audit log (filters: `q`, `action`, `from`, `to`, `entityId`, `page`) |
+| GET | `/api/reports/learners.csv` | admin | All-learner performance report (CSV) |
+| GET | `/api/reports/learners/:id.csv` | admin | Single-learner report (CSV) |
+| POST | `/api/me/assignments/:id/submit` | learner | Submit; graded on server (supports `Idempotency-Key`) |
 | GET | `/api/me/history` | learner | All my attempts |
 
 

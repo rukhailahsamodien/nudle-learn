@@ -36,9 +36,23 @@ const ACTIVITIES = [
     type: 'simulation', subject: 'Physics', duration_min: 15, pass_mark: 100,
     content: {
       simulation: 'projectile', targetDistance: 40, tolerance: 2,
+      planet: 'earth', gravity: 9.8, angleMin: 5, angleMax: 85, speedMin: 5, speedMax: 40, maxLaunches: 0, showGuide: true,
       instructions: 'Adjust the launch angle and speed, then press Launch. Land within 2 m of the flag at 40 m to complete the lab. (g = 9.8 m/s²)',
       questions: [
         { q: 'Ignoring air resistance, which launch angle gives the maximum range?', options: ['30°', '45°', '60°', '90°'], answer: 1 },
+      ],
+    },
+  },
+  {
+    title: 'Lunar Launch Challenge',
+    description: 'Same physics, different world: hit the target on the Moon, where gravity is about 1/6 of Earth\'s.',
+    type: 'simulation', subject: 'Physics', duration_min: 15, pass_mark: 100,
+    content: {
+      simulation: 'projectile', targetDistance: 120, tolerance: 4,
+      planet: 'moon', gravity: 1.62, angleMin: 10, angleMax: 80, speedMin: 5, speedMax: 25, maxLaunches: 8, showGuide: false,
+      instructions: 'On the Moon (g = 1.62 m/s²) things fly much further. Land within 4 m of the flag at 120 m. You have 8 launches and no aiming guide.',
+      questions: [
+        { q: 'Why does the same launch travel further on the Moon?', options: ['Less air', 'Weaker gravity', 'Lighter projectile', 'Bigger target'], answer: 1 },
       ],
     },
   },
@@ -93,7 +107,7 @@ function seedData(db) {
   // deterministic sample progress
   learnerIds.forEach((lid, li) => {
     actIds.forEach((aid, ai) => {
-      if ((li + ai) % 4 === 3) return; // not every learner gets every activity
+      if ((li + ai) % 4 === 3 && ACTIVITIES[ai].content.planet !== 'moon') return; // not every learner gets every activity (the Moon showcase goes to all)
       const mode = (li * 3 + ai) % 3; // 0 completed, 1 in progress, 2 assigned
       const due = `+${7 + ai * 3} days`;
       if (mode === 0) {
@@ -103,9 +117,11 @@ function seedData(db) {
         const asgId = insAsg.run(aid, lid, due, 'completed', score, score, 1, sqlTime(86400000 * (li + 2)), done).lastInsertRowid;
         let runId = null;
         if (ACTIVITIES[ai].type === 'simulation') {
-          // a successful launch: 45° at 19.8 m/s lands at ~40 m
+          // a successful launch at 45°: speed chosen so range = target (R = v²/g)
+          const c = ACTIVITIES[ai].content, speed = Math.round(Math.sqrt(c.targetDistance * c.gravity) * 10) / 10;
+          const range = Math.round((speed * speed / c.gravity) * 10) / 10;
           runId = db.prepare('INSERT INTO simulation_runs (assignment_id, angle, speed, range_m, target_m, hit, created_at) VALUES (?,?,?,?,?,1,?)')
-            .run(asgId, 45, 19.8, 40, 40, done).lastInsertRowid;
+            .run(asgId, 45, speed, range, c.targetDistance, done).lastInsertRowid;
         }
         db.prepare('INSERT INTO attempts (assignment_id, score, passed, submitted_at, simulation_run_id) VALUES (?,?,1,?,?)').run(asgId, score, done, runId);
       } else if (mode === 1) {

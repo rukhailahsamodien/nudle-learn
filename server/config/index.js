@@ -26,4 +26,5 @@ module.exports = {
   tokenTtlMs: 1000 * 60 * 60 * 12,           // 12 hours
   loginRateLimit: { windowMs: 15 * 60 * 1000, max: 10 }, // 10 failed logins / 15 min per IP+email
   gravity: 9.8,
+  requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS) || 15000,
 };

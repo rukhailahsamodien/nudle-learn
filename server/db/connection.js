@@ -67,6 +67,37 @@ const MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_assignments_activity ON assignments(activity_id);
     CREATE INDEX IF NOT EXISTS idx_attempts_assignment ON attempts(assignment_id);
     CREATE INDEX IF NOT EXISTS idx_simruns_assignment ON simulation_runs(assignment_id);`,
+  // v3 – audit log, saved progress, idempotency keys (Challenge 5)
+  `CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      actor_name TEXT,
+      actor_role TEXT,
+      action TEXT NOT NULL,
+      entity TEXT,
+      entity_id INTEGER,
+      summary TEXT NOT NULL,
+      details TEXT,
+      ip TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
+    CREATE TABLE IF NOT EXISTS assignment_progress (
+      assignment_id INTEGER PRIMARY KEY REFERENCES assignments(id) ON DELETE CASCADE,
+      state TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS idempotency_keys (
+      key TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      route TEXT NOT NULL,
+      status INTEGER NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (key, user_id)
+    );`,
 ];
 
 function migrate(db) {

@@ -12,6 +12,7 @@ function errorHandler(err, req, res, next) {
     return res.status(err.status).json({ error: err.message, code: err.code, ...(err.details ? { details: err.details } : {}) });
   }
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Request body is not valid JSON', code: 'INVALID_JSON' });
+  if (err.type === 'request.aborted' || err.code === 'ECONNABORTED') return; // client went away – nothing to send
   if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Request body is too large', code: 'PAYLOAD_TOO_LARGE' });
   if (/UNIQUE constraint failed/.test(err.message)) return res.status(409).json({ error: 'That record already exists', code: 'CONFLICT' });
   if (/CHECK constraint failed|FOREIGN KEY constraint failed/.test(err.message)) return res.status(400).json({ error: 'Invalid data', code: 'VALIDATION_ERROR' });

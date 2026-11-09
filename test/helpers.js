@@ -3,10 +3,11 @@ const { seed } = require('../server/db/seed');
 const { createApp } = require('../server/app');
 
 // Starts an isolated app on a random port with an in-memory database.
-async function startServer({ seedData = true, loginRateLimit } = {}) {
+async function startServer({ seedData = true, loginRateLimit, requestTimeoutMs } = {}) {
   const db = openDb(':memory:');
   if (seedData) seed(db);
-  const server = createApp(db, { secret: 'test-secret', loginRateLimit }).listen(0);
+  const expressApp = createApp(db, { secret: 'test-secret', loginRateLimit, requestTimeoutMs });
+  const server = expressApp.listen(0);
   await new Promise(r => server.once('listening', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = async (path, { method = 'GET', body, token, raw } = {}) => {
@@ -19,7 +20,7 @@ async function startServer({ seedData = true, loginRateLimit } = {}) {
     return { status: res.status, headers: res.headers, data: text ? JSON.parse(text) : null };
   };
   const login = async (email, password) => (await call('/api/auth/login', { method: 'POST', body: { email, password } })).data.token;
-  return { db, server, call, login, close: () => new Promise(r => server.close(r)) };
+  return { db, server, base, call, login, events: expressApp.locals.events, close: () => new Promise(r => { server.closeAllConnections?.(); server.close(r); }) };
 }
 
 module.exports = { startServer };

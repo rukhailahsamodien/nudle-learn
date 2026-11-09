@@ -1,11 +1,11 @@
 // Learner-facing operations: view assignments, run simulations, submit attempts.
 const v = require('../utils/validate');
-const { badRequest, notFound } = require('../utils/errors');
+const { badRequest, notFound, conflict } = require('../utils/errors');
 const { transaction } = require('../db/connection');
 const { toActivity, summarize } = require('./mappers');
 const { evaluateLaunch, gradeSubmission } = require('./grading');
 
-module.exports = ({ db, assignments, gravity }) => {
+module.exports = ({ db, assignments, progress, gravity }) => {
   const getOwnOr404 = (id, learnerId) => {
     const s = assignments.findForLearner(v.id(id, 'assignment id'), learnerId);
     if (!s) throw notFound('Assignment'); // also covers other learners' assignments – no information leak
@@ -20,7 +20,11 @@ module.exports = ({ db, assignments, gravity }) => {
     get(id, learnerId) {
       const s = getOwnOr404(id, learnerId);
       const out = toActivity(s, { hideAnswers: true });
-      if (s.type === 'simulation') out.simulationRuns = assignments.simulationRunsForAssignment(s.id).slice(0, 10);
+      if (s.type === 'simulation') {
+        out.simulationRuns = assignments.simulationRunsForAssignment(s.id).slice(0, 10);
+        out.launchesUsed = assignments.countSimulationRuns(s.id);
+      }
+      out.progress = progress.get(s.id);
       return out;
     },
     start(id, learnerId) {
@@ -33,10 +37,14 @@ module.exports = ({ db, assignments, gravity }) => {
     runSimulation(id, learnerId, body = {}) {
       const s = getOwnOr404(id, learnerId);
       if (s.type !== 'simulation') throw badRequest('This activity has no simulation');
-      const angle = v.number(body.angle, 'Angle', { min: 1, max: 89 });
-      const speed = v.number(body.speed, 'Speed', { min: 1, max: 100 });
       const content = toActivity(s).content;
-      const result = evaluateLaunch({ angle, speed }, content, gravity);
+      // Launch limits come from the activity's scenario (older activities fall back to the defaults).
+      const angle = v.number(body.angle, 'Angle', { min: content.angleMin ?? 1, max: content.angleMax ?? 89 });
+      const speed = v.number(body.speed, 'Speed', { min: content.speedMin ?? 1, max: content.speedMax ?? 100 });
+      if (content.maxLaunches && assignments.countSimulationRuns(s.id) >= content.maxLaunches) {
+        throw conflict(`You have used all ${content.maxLaunches} launches for this activity`);
+      }
+      const result = evaluateLaunch({ angle, speed }, content, content.gravity ?? gravity);
       const runId = transaction(db, () => {
         assignments.markStarted(s.id);
         return assignments.insertSimulationRun({ assignmentId: s.id, angle, speed, ...result });
@@ -66,12 +74,37 @@ module.exports = ({ db, assignments, gravity }) => {
       transaction(db, () => {
         assignments.insertAttempt({ assignmentId: s.id, score: result.score, passed, answers: cleanAnswers, simulationRunId: run?.id });
         assignments.recordResult(s.id, { score: result.score, passed });
+        if (passed) progress.clear(s.id);
       });
       return {
-        ...result, passed, passMark: s.pass_mark,
+        ...result, passed, passMark: s.pass_mark, title: s.title,
         simulation: run ? { hit: !!run.hit, range: run.range_m, target: run.target_m } : null,
       };
     },
     history: (learnerId) => assignments.attemptsForLearner(learnerId),
+
+    // Autosaved work-in-progress so a learner can close the tab and resume later.
+    saveProgress(id, learnerId, body = {}) {
+      const s = getOwnOr404(id, learnerId);
+      v.object(body, 'Progress');
+      const content = toActivity(s).content;
+      const qCount = (content.questions || []).length;
+      const state = {};
+      if (body.angle != null) state.angle = v.number(body.angle, 'Angle', { min: 1, max: 89 });
+      if (body.speed != null) state.speed = v.number(body.speed, 'Speed', { min: 1, max: 100 });
+      if (body.answers != null) {
+        if (!Array.isArray(body.answers) || body.answers.length > qCount) throw badRequest('Answers must be a list matching the questions');
+        state.answers = body.answers.map((a, i) => a == null ? null : v.int(a, `Answer ${i + 1}`, { min: 0, max: content.questions[i].options.length - 1 }));
+      }
+      if (body.section != null) state.section = v.int(body.section, 'Section', { min: 0, max: 100 });
+      progress.save(s.id, state);
+      if (s.status === 'assigned') assignments.markStarted(s.id);
+      return { saved: true, state, savedAt: progress.get(s.id).savedAt };
+    },
+    clearProgress(id, learnerId) {
+      const s = getOwnOr404(id, learnerId);
+      progress.clear(s.id);
+      return { cleared: true };
+    },
   };
 };

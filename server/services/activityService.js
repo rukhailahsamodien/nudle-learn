@@ -21,6 +21,28 @@ function parseQuestions(list) {
   });
 }
 
+// Configurable simulation scenario: world gravity, allowed launch ranges, attempt limit, aiming guide.
+const PLANETS = { earth: 9.8, moon: 1.62, mars: 3.71, jupiter: 24.79, custom: null };
+function parseScenario(raw, content) {
+  const planet = raw.planet ? v.oneOf(raw.planet, 'Planet', Object.keys(PLANETS)) : 'earth';
+  const gravity = planet === 'custom' ? v.number(raw.gravity, 'Gravity', { min: 0.5, max: 30 }) : PLANETS[planet];
+  const angleMin = v.int(raw.angleMin, 'Minimum angle', { min: 1, max: 88, fallback: 5 });
+  const angleMax = v.int(raw.angleMax, 'Maximum angle', { min: 2, max: 89, fallback: 85 });
+  const speedMin = v.number(raw.speedMin ?? 5, 'Minimum speed', { min: 1, max: 99 });
+  const speedMax = v.number(raw.speedMax ?? 40, 'Maximum speed', { min: 2, max: 100 });
+  if (angleMin >= angleMax) throw badRequest('Minimum angle must be less than maximum angle');
+  if (speedMin >= speedMax) throw badRequest('Minimum speed must be less than maximum speed');
+  const maxLaunches = v.int(raw.maxLaunches, 'Launch limit', { min: 0, max: 100, fallback: 0 });
+  const showGuide = raw.showGuide === undefined ? true : !!raw.showGuide;
+  // Make sure the target can actually be reached with these settings.
+  const best = Math.min(Math.max(45, angleMin), angleMax);
+  const maxRange = (speedMax * speedMax * Math.sin(2 * best * Math.PI / 180)) / gravity;
+  if (maxRange < content.targetDistance - content.tolerance) {
+    throw badRequest(`The target can't be reached with these settings (max range is about ${Math.round(maxRange)} m). Increase the maximum speed or lower the target distance.`);
+  }
+  return { planet, gravity, angleMin, angleMax, speedMin, speedMax, maxLaunches, showGuide };
+}
+
 function parseActivity(body) {
   v.object(body, 'Request body');
   const type = v.oneOf(body.type, 'Type', TYPES);
@@ -40,6 +62,7 @@ function parseActivity(body) {
     content.targetDistance = v.number(raw.targetDistance ?? 40, 'Target distance', { min: 5, max: 160 });
     content.tolerance = v.number(raw.tolerance ?? 2, 'Tolerance', { min: 0.5, max: 20 });
     content.instructions = v.string(raw.instructions, 'Instructions', { max: 1000, required: false });
+    Object.assign(content, parseScenario(raw, content));
   }
   return {
     title: v.string(body.title, 'Title', { min: 3, max: 120 }),
@@ -52,7 +75,7 @@ function parseActivity(body) {
   };
 }
 
-module.exports = ({ db, activities, assignments, users }) => {
+module.exports = Object.assign(({ db, activities, assignments, users }) => {
   const getOr404 = (id) => {
     const a = activities.findById(v.id(id, 'activity id'));
     if (!a) throw notFound('Activity');
@@ -99,4 +122,4 @@ module.exports = ({ db, activities, assignments, users }) => {
       if (!assignments.remove(v.id(id, 'assignment id'))) throw notFound('Assignment');
     },
   };
-};
+}, { PLANETS });

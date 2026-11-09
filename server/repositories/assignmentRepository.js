@@ -36,6 +36,7 @@ module.exports = (db) => ({
   findSimulationRun: (id, assignmentId) => db.prepare('SELECT * FROM simulation_runs WHERE id = ? AND assignment_id = ?').get(id, assignmentId),
   latestSimulationRun: (assignmentId) => db.prepare('SELECT * FROM simulation_runs WHERE assignment_id = ? ORDER BY id DESC LIMIT 1').get(assignmentId),
   simulationRunsForAssignment: (assignmentId) => db.prepare('SELECT * FROM simulation_runs WHERE assignment_id = ? ORDER BY id DESC').all(assignmentId),
+  countSimulationRuns: (assignmentId) => db.prepare('SELECT COUNT(*) AS c FROM simulation_runs WHERE assignment_id = ?').get(assignmentId).c,
   simulationRunsForLearner: (learnerId) => db.prepare(`SELECT r.*, a.title FROM simulation_runs r
     JOIN assignments s ON s.id = r.assignment_id JOIN activities a ON a.id = s.activity_id
     WHERE s.learner_id = ? ORDER BY r.id DESC`).all(learnerId),
