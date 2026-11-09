@@ -28,8 +28,36 @@ A web-based learning platform that lets educational institutions manage learners
 | Back end  | Node.js 22 + Express 4, REST JSON API |
 | Database  | SQLite via Node's built-in `node:sqlite` (no native build step), versioned migrations |
 | Auth      | scrypt-hashed passwords, HMAC-signed bearer tokens (12 h), role-based route guards |
-| Front end | Dependency-free single-page app (vanilla JS, hash routing), responsive CSS, canvas simulation |
+| Front end | Dependency-free single-page app (vanilla JS, hash routing), custom accessible component set, responsive CSS, canvas simulation |
 | Tests     | Node's built-in test runner – unit + API integration + statistics accuracy tests |
+
+## UI & UX design (Challenge 4)
+
+<p>
+  <img src="docs/screenshots/03-admin-dashboard.png" alt="Admin dashboard" width="62%">
+  <img src="docs/screenshots/m6-simulation.png" alt="Simulation on a phone" width="18%">
+  <img src="docs/screenshots/m4-learners.png" alt="Learners on a phone" width="18%">
+</p>
+
+| Requirement | How it is met | Screenshot |
+|---|---|---|
+| **Consistent visual identity** | One set of design tokens (CSS variables) for colour, radius, shadow, spacing and type. Purple = brand and actions, navy = navigation, light grey = page, white = cards. Green / amber / red are used **only** for status and feedback. One custom SVG icon set and logo (no emoji, so icons look the same everywhere). Poppins/Gilroy font, with the 60 px mint display headline on the login page. | [Login](docs/screenshots/01-login.png) |
+| **Clear navigation & intuitive workflows** | Sidebar with the current page highlighted (`aria-current`), breadcrumbs on detail pages, browser-tab titles per page, a "Skip to main content" link. Learners get a **Continue / Start** button for their next activity, a step indicator (Experiment → Answer → Submit) and a **Next activity** button after passing. Empty states always offer the next action ("No learners yet → Add learner"). | [Learner dashboard](docs/screenshots/09-learner-dashboard.png) · [Result](docs/screenshots/14-result.png) |
+| **Responsive desktop & mobile** | Grids collapse 4 → 2 → 1 columns. On phones the sidebar becomes a slide-in drawer with backdrop (closes on link, backdrop or Esc), tables turn into labelled cards, dialogs become bottom sheets with a sticky action bar, and the simulation canvas resizes to the screen (sharp on high-DPI displays). Checked at 390 px with no horizontal scrolling. | [Menu](docs/screenshots/m3-menu.png) · [Table cards](docs/screenshots/m4-learners.png) · [Dialog](docs/screenshots/m5-modal.png) |
+| **Well-designed forms, tables & components** | Every field has a visible label, a red `*` or "(optional)", hint text and its **own error message** next to it; a summary ("Please fix 3 highlighted fields") and focus jumps to the first problem. Server errors are mapped back onto the right field. Tables have **sortable columns**, keyboard-openable rows and a result count; search is debounced. Custom radio options, styled range sliders, tabs with counts, a show/hide password toggle. | [Form errors](docs/screenshots/05-form-validation.png) · [Activity form](docs/screenshots/08-activity-form.png) · [Sorted table](docs/screenshots/04-learners.png) |
+| **Loading, success & error states** | **Loading:** skeleton placeholders on every page, spinner + "Saving…" on buttons (which also blocks double-submits), dimmed table while filtering. **Success:** toast messages, green result banner with confetti. **Error:** inline field errors, red toast, and a full-page error card with **Try again**; network failures get a friendly message; expired sessions return to login with an explanation. | [Login errors](docs/screenshots/02-login-errors.png) · [Validation](docs/screenshots/13-sim-validation.png) |
+| **Accessible labels, controls & feedback** | Semantic landmarks and headings, labels on every control, `aria-invalid` / `aria-describedby` on errors, live regions for toasts, results, sort changes and simulation readings. Dialogs trap focus, close with Esc and return focus to the button that opened them. Status is never colour-only (always icon + text). Visible focus rings everywhere, 40 px+ touch targets, `prefers-reduced-motion` respected (animations and confetti switch off). **Automated check: axe-core reports 0 WCAG 2 A/AA violations on all 11 screens.** | — |
+| **Visually engaging simulation** | Night-sky scene with parallax hills and a waving target flag; a rotating launcher; a dashed **aiming guide** (shows only the start of the path so it doesn't give the answer away); a glowing trail; live **HUD** (distance, height, time); **ghost paths** of earlier launches; a "BULLSEYE!" banner and particle burst on a hit, or "6.9 m short" with a hint on a miss; a launch history with one-click **Reuse**; predicted flight time and peak height; a "How does it work?" panel with the formula. Fully **keyboard playable**: focus the canvas, arrows adjust angle/speed (Shift = bigger steps), Enter launches. | [Simulation](docs/screenshots/12-simulation-hit.png) · [Phone](docs/screenshots/m6-simulation.png) |
+
+### Design decisions
+- **No UI library.** The brief allows one, but a small hand-built component set keeps the bundle tiny, avoids a build step, and lets every component be tuned for accessibility.
+- **Status colours are reserved** so that green, amber and red always *mean* something; brand purple never competes with them.
+- **Validate on the client, enforce on the server.** Instant inline feedback for the user; the server still has the final say, and its messages are shown next to the right field.
+- **Skeletons instead of spinners for pages**, so the layout doesn't jump when data arrives.
+- **The aiming guide is deliberately partial**, keeping the simulation a learning challenge rather than a guessing tool, while ghost paths and miss hints help learners improve.
+
+### Screenshots
+All in [`docs/screenshots`](docs/screenshots): desktop `01`–`15`, phone `m1`–`m6`.
 
 ## Back-end architecture (Challenge 3)
 
